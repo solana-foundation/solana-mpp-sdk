@@ -107,8 +107,9 @@ export function charge(parameters: charge.Parameters) {
     },
 
     async verify({ credential }) {
-      const challenge = credential.challenge.request
-      const payloadType = resolvePayloadType(credential.payload)
+      const cred = credential as unknown as CredentialPayload
+      const challenge = cred.challenge.request
+      const payloadType = resolvePayloadType(cred.payload)
 
       // Spec: type="signature" MUST NOT be used with feePayer: true
       if (payloadType === 'signature' && challenge.methodDetails.feePayer) {
@@ -119,7 +120,7 @@ export function charge(parameters: charge.Parameters) {
 
       if (payloadType === 'transaction') {
         return await verifyTransaction(
-          credential,
+          cred,
           challenge,
           rpcUrl,
           recipient,
@@ -129,7 +130,7 @@ export function charge(parameters: charge.Parameters) {
       }
 
       return await verifySignature(
-        credential,
+        cred,
         challenge,
         rpcUrl,
         recipient,
@@ -152,8 +153,8 @@ function resolvePayloadType(
 // ── Server-broadcast path (type="transaction") ──
 
 async function verifyTransaction(
-  credential: any,
-  challenge: any,
+  credential: CredentialPayload,
+  challenge: ChallengeRequest,
   rpcUrl: string,
   recipient: string,
   store: Store.Store,
@@ -199,8 +200,8 @@ async function verifyTransaction(
 // ── Client-broadcast path (type="signature") ──
 
 async function verifySignature(
-  credential: any,
-  challenge: any,
+  credential: CredentialPayload,
+  challenge: ChallengeRequest,
   rpcUrl: string,
   recipient: string,
   store: Store.Store,
@@ -221,7 +222,7 @@ async function verifySignature(
   if (!tx) throw new Error('Transaction not found or not yet confirmed')
   if (tx.meta?.err) throw new Error('Transaction failed on-chain')
 
-  const instructions = tx.transaction.message.instructions as ParsedInstruction[]
+  const instructions = tx.transaction.message.instructions
   await verifyInstructions(instructions, challenge, recipient)
 
   // Mark consumed to prevent replay.
@@ -240,20 +241,20 @@ async function verifySignature(
 async function verifyOnChain(
   rpcUrl: string,
   signature: string,
-  challenge: any,
+  challenge: ChallengeRequest,
   recipient: string,
 ) {
   const tx = await fetchTransaction(rpcUrl, signature)
   if (!tx) throw new Error('Transaction not found or not yet confirmed')
   if (tx.meta?.err) throw new Error('Transaction failed on-chain')
 
-  const instructions = tx.transaction.message.instructions as ParsedInstruction[]
+  const instructions = tx.transaction.message.instructions
   await verifyInstructions(instructions, challenge, recipient)
 }
 
 async function verifyInstructions(
   instructions: ParsedInstruction[],
-  challenge: any,
+  challenge: ChallengeRequest,
   recipient: string,
 ) {
   const expectedAmount = challenge.amount
@@ -270,7 +271,11 @@ async function verifyInstructions(
       throw new Error('No TransferChecked instruction found in transaction')
     }
 
-    const info = transfer.parsed!.info
+    const info = transfer.parsed!.info as {
+      mint: string
+      destination: string
+      tokenAmount: { amount: string }
+    }
     if (info.mint !== challenge.methodDetails.splToken) {
       throw new Error(
         `Token mint mismatch: expected ${challenge.methodDetails.splToken}, got ${info.mint}`,
@@ -305,7 +310,10 @@ async function verifyInstructions(
       throw new Error('No system transfer instruction found in transaction')
     }
 
-    const info = transfer.parsed!.info
+    const info = transfer.parsed!.info as {
+      destination: string
+      lamports: number
+    }
     if (info.destination !== recipient) {
       throw new Error(
         `Recipient mismatch: expected ${recipient}, got ${info.destination}`,
@@ -319,21 +327,63 @@ async function verifyInstructions(
   }
 }
 
-// ── RPC helpers ──
+// ── Types ──
 
+/** Credential payload from the mppx framework. */
+type CredentialPayload = {
+  payload: {
+    type?: string
+    signature?: string
+    transaction?: string
+  }
+  challenge: {
+    id?: string
+    request: ChallengeRequest
+  }
+}
+
+/** The request portion of a challenge, matching the Methods.ts schema. */
+type ChallengeRequest = {
+  amount: string
+  currency: string
+  recipient: string
+  methodDetails: {
+    reference: string
+    network?: string
+    splToken?: string
+    decimals?: number
+    tokenProgram?: string
+    feePayer?: boolean
+    feePayerKey?: string
+  }
+}
+
+/** A parsed instruction from a jsonParsed transaction. */
 type ParsedInstruction = {
   program?: string
   programId?: string
   parsed?: {
     type: string
-    info: Record<string, any>
+    info: Record<string, unknown>
   }
 }
+
+/** A parsed transaction result from getTransaction RPC. */
+type ParsedTransaction = {
+  meta: { err: unknown } | null
+  transaction: {
+    message: {
+      instructions: ParsedInstruction[]
+    }
+  }
+}
+
+// ── RPC helpers ──
 
 async function fetchTransaction(
   rpcUrl: string,
   signature: string,
-): Promise<any> {
+): Promise<ParsedTransaction | null> {
   const response = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -352,11 +402,11 @@ async function fetchTransaction(
     }),
   })
   const data = (await response.json()) as {
-    result?: any
+    result?: ParsedTransaction | null
     error?: { message: string }
   }
   if (data.error) throw new Error(`RPC error: ${data.error.message}`)
-  return data.result
+  return data.result ?? null
 }
 
 async function broadcastTransaction(
