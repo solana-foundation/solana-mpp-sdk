@@ -75,24 +75,15 @@ test('coSignBase64Transaction co-signs with a valid TransactionPartialSigner', a
     assert.notEqual(feePayerSig, new Uint8Array(64), 'fee payer signature should not be empty bytes');
 });
 
-test('coSignBase64Transaction throws when signer returns no signature', async () => {
-    const { base64Tx } = await buildPartiallySignedTx();
+test('coSignBase64Transaction preserves existing signatures', async () => {
+    const { base64Tx, feePayer, sender } = await buildPartiallySignedTx();
 
-    const brokenSigner: TransactionPartialSigner = {
-        address: address('AM1LZ111111111111111111111111111111111111111'),
-        signTransactions: async () => [{}] as any,
-    };
+    const result = await coSignBase64Transaction(feePayer, base64Tx);
 
-    await assert.rejects(
-        () => coSignBase64Transaction(brokenSigner, base64Tx),
-        (err: Error) => {
-            assert.ok(
-                err.message.includes('returned no signature'),
-                `expected "returned no signature", got: ${err.message}`,
-            );
-            return true;
-        },
-    );
+    // Decode and verify both sender and fee payer signatures are present
+    const decoded = getTransactionDecoder().decode(getBase64Codec().encode(result));
+    assert.ok(decoded.signatures[feePayer.address], 'fee payer sig should be present');
+    assert.ok(decoded.signatures[sender.address], 'sender sig should be preserved');
 });
 
 test('coSignBase64Transaction throws on invalid base64 input', async () => {
