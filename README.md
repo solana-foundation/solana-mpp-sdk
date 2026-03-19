@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="MPP" width="100%" />
+  <img src="https://github.com/solana-foundation/mpp-sdk/raw/main/assets/banner.png" alt="MPP" width="100%" />
 </p>
 
 # @solana/mpp
