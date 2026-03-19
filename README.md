@@ -195,13 +195,14 @@ See [demo/README.md](demo/README.md) for full details.
 ## Development
 
 ```bash
-npm install
+pnpm install
 
-npm run typecheck          # TypeScript check
-npm test                   # Unit tests (charge + session, no network)
-npm run test:session       # Session unit tests only
-npm run test:integration   # Integration tests (requires Surfpool)
-npm run test:all           # All tests
+just fmt              # Format and lint
+just build            # Typecheck
+just test             # Unit tests (charge + session, no network)
+just test-integration # Integration tests (requires Surfpool)
+just test-all         # All tests
+just pre-commit       # fmt + typecheck + unit tests
 ```
 
 ## Spec
