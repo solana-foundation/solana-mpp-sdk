@@ -1,9 +1,9 @@
 /**
  * Tests for the server charge verification logic.
  *
- * Covers both credential types:
- * - type="signature" (client-broadcast): server fetches + verifies on-chain
- * - type="transaction" (server-broadcast): server broadcasts, confirms, then verifies on-chain
+ * Covers both settlement modes:
+ * - Push mode (type="signature"): server fetches + verifies on-chain
+ * - Pull mode (type="transaction"): server broadcasts, confirms, then verifies on-chain
  */
 import { test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +20,7 @@ const USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 const SIGNATURE = '5UfDuX6nSqMzMR8W7n6K3b1GKLmaqEisBFCcYPRLjNHrCbVQJF3BVjkE7aQJMQ2Kx';
 const FAKE_TX_BASE64 = 'AQAAAA...'; // Placeholder base64-encoded signed tx
 
-/** Build a type="signature" credential (client-broadcast). */
+/** Build a push mode credential (type="signature"). */
 function signatureCredential(
     sig: string,
     overrides: {
@@ -55,7 +55,7 @@ function signatureCredential(
     } as any;
 }
 
-/** Build a type="transaction" credential (server-broadcast). */
+/** Build a pull mode credential (type="transaction"). */
 function transactionCredential(
     txBase64: string,
     overrides: {
@@ -249,7 +249,9 @@ test('request() returns the challenge request when credential is present', async
 });
 
 // ══════════════════════════════════════════════════════════════════════
-// type="signature" (client-broadcast) — existing behavior
+// ══════════════════════════════════════════════════════════════════════
+// Push mode (type="signature")
+// ══════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════
 
 // ── Native SOL verification ──
@@ -588,11 +590,11 @@ test('signature: throws when no TransferChecked instruction found (SPL)', async 
 });
 
 // ══════════════════════════════════════════════════════════════════════
-// type="transaction" (server-broadcast)
+// Pull mode (type="transaction")
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Helper to mock fetch for server-broadcast flow.
+ * Helper to mock fetch for pull mode flow.
  * The server makes 3 sequential RPC calls:
  *   1. sendTransaction → returns signature
  *   2. getSignatureStatuses → returns confirmed
@@ -625,7 +627,7 @@ function mockServerBroadcastFetch(txResult: unknown, signature: string = SIGNATU
     };
 }
 
-test('transaction: accepts valid native SOL transfer via server-broadcast', async () => {
+test('pull: accepts valid native SOL transfer', async () => {
     const method = charge({
         recipient: RECIPIENT,
         network: 'devnet',
@@ -644,7 +646,7 @@ test('transaction: accepts valid native SOL transfer via server-broadcast', asyn
     assert.equal(receipt.reference, SIGNATURE);
 });
 
-test('transaction: accepts valid SPL token transfer via server-broadcast', async () => {
+test('pull: accepts valid SPL token transfer', async () => {
     const method = charge({
         recipient: RECIPIENT,
         splToken: USDC_MINT,

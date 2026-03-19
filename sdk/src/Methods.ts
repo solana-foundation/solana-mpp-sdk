@@ -3,14 +3,14 @@ import { Method, z } from 'mppx';
 /**
  * Solana charge method — shared schema used by both server and client.
  *
- * Supports two credential payload types:
+ * Supports two settlement modes:
  *
- * - **type="transaction"** (default): Client signs the transaction and sends
- *   the serialized bytes to the server. The server broadcasts it to the
- *   Solana network, confirms, and verifies the transfer on-chain.
+ * - **Pull mode** (`type="transaction"`, default): Client signs the
+ *   transaction and sends the bytes to the server. The server broadcasts,
+ *   confirms, and verifies the transfer on-chain.
  *
- * - **type="signature"**: Client broadcasts the transaction itself and sends
- *   the confirmed transaction signature. The server verifies on-chain only.
+ * - **Push mode** (`type="signature"`): Client broadcasts the transaction
+ *   itself and sends the confirmed signature. The server verifies on-chain.
  */
 export const charge = Method.from({
     intent: 'charge',

@@ -528,13 +528,13 @@ after(() => {
 
 // ── Tests ──
 
-test('e2e: native SOL charge via server-broadcast (default)', async () => {
+test('e2e: native SOL charge via pull mode (default)', async () => {
     const events: string[] = [];
 
     const clientMethod = clientSolana.charge({
         signer: clientSigner,
         rpcUrl: RPC_URL,
-        // broadcast defaults to false (server-broadcast)
+        // broadcast defaults to false (pull mode)
         onProgress(event) {
             events.push(event.type);
         },
@@ -564,7 +564,7 @@ test('e2e: native SOL charge via server-broadcast (default)', async () => {
     );
 });
 
-test('e2e: native SOL charge via client-broadcast', async () => {
+test('e2e: native SOL charge via push mode', async () => {
     const events: string[] = [];
 
     const clientMethod = clientSolana.charge({
@@ -584,7 +584,7 @@ test('e2e: native SOL charge via client-broadcast', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(data, { paid: true });
 
-    // Client-broadcast should fire: challenge → signing → paying → confirming → paid
+    // Push mode should fire: challenge → signing → paying → confirming → paid
     assert.ok(events.includes('challenge'), 'should emit challenge');
     assert.ok(events.includes('signing'), 'should emit signing');
     assert.ok(events.includes('paying'), 'should emit paying');

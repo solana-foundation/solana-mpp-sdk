@@ -38,13 +38,13 @@ const textEncoder = new TextEncoder();
  *
  * Supports two modes controlled by the `broadcast` option:
  *
- * - **`broadcast: false`** (default, server-broadcast): Signs the transaction
+ * - **Pull mode** (`broadcast: false`, default): Signs the transaction
  *   and sends the serialized bytes as a `type="transaction"` credential.
  *   The server broadcasts it to the Solana network.
  *
- * - **`broadcast: true`** (client-broadcast): Signs, broadcasts, confirms
+ * - **Push mode** (`broadcast: true`): Signs, broadcasts, confirms
  *   the transaction on-chain, and sends the signature as a `type="signature"`
- *   credential. Cannot be used with server fee sponsorship.
+ *   credential. Cannot be used with fee sponsorship.
  *
  * When the server advertises `feePayer: true` in the challenge, the client
  * sets the server's `feePayerKey` as the transaction fee payer and partially
@@ -210,7 +210,7 @@ export function charge(parameters: charge.Parameters) {
             const encodedTx = getBase64EncodedWireTransaction(signedTx);
 
             if (broadcast) {
-                // ── Client-broadcast mode (type="signature") ──
+                // ── Push mode (type="signature") ──
                 onProgress?.({ type: 'paying' });
 
                 const signature = await rpc
@@ -230,7 +230,7 @@ export function charge(parameters: charge.Parameters) {
                 });
             }
 
-            // ── Server-broadcast mode (type="transaction", default) ──
+            // ── Pull mode (type="transaction", default) ──
             onProgress?.({ transaction: encodedTx, type: 'signed' });
 
             return Credential.serialize({
@@ -287,7 +287,7 @@ function createReferenceMemoInstruction(reference: string): Instruction {
 
 /**
  * Polls for transaction confirmation via getSignatureStatuses.
- * Only used in client-broadcast mode.
+ * Only used in push mode.
  */
 async function confirmTransaction(rpc: ReturnType<typeof createSolanaRpc>, signature: string, timeoutMs = 30_000) {
     const start = Date.now();

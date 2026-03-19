@@ -15,7 +15,7 @@ Solana payment method for the [Machine Payments Protocol](https://mpp.dev).
 
 **Charge** (one-time payments)
 - Native SOL and SPL token transfers (USDC, PYUSD, Token-2022, etc.)
-- Two settlement flows: server-broadcast (`type="transaction"`, default) and client-broadcast (`type="signature"`)
+- Two settlement modes: pull (`type="transaction"`, default) and push (`type="signature"`)
 - Fee sponsorship: server pays transaction fees on behalf of clients
 - Replay protection via consumed transaction signatures
 

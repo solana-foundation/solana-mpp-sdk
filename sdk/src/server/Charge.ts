@@ -9,15 +9,16 @@ import { coSignBase64Transaction } from '../utils/transactions.js';
 /**
  * Creates a Solana `charge` method for usage on the server.
  *
- * Supports two credential types:
+ * Supports two settlement modes:
  *
- * - **type="transaction"** (default): The server receives a signed transaction
- *   from the client, broadcasts it to Solana, confirms it, and verifies the
- *   transfer on-chain. When `signer` is provided, the server co-signs as fee
- *   payer before broadcasting.
+ * - **Pull mode** (`type="transaction"`, default): The server receives a
+ *   signed transaction from the client, broadcasts it to Solana, confirms
+ *   it, and verifies the transfer on-chain. When `signer` is provided,
+ *   the server co-signs as fee payer before broadcasting.
  *
- * - **type="signature"**: The client has already broadcast and confirmed the
- *   transaction. The server verifies the transfer on-chain using the signature.
+ * - **Push mode** (`type="signature"`): The client has already broadcast
+ *   and confirmed the transaction. The server verifies the transfer
+ *   on-chain using the signature.
  *
  * @example
  * ```ts
@@ -141,7 +142,7 @@ function resolvePayloadType(payload: {
     throw new Error('Missing or invalid payload type: must be "transaction" or "signature"');
 }
 
-// ── Server-broadcast path (type="transaction") ──
+// ── Pull mode (type="transaction") ──
 
 async function verifyTransaction(
     credential: CredentialPayload,
@@ -191,7 +192,7 @@ async function verifyTransaction(
     });
 }
 
-// ── Client-broadcast path (type="signature") ──
+// ── Push mode (type="signature") ──
 
 async function verifySignature(
     credential: CredentialPayload,
