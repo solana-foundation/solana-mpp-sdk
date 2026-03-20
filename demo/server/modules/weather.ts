@@ -29,7 +29,7 @@ export function registerWeather(
       recipient,
       network,
       signer: feePayerSigner,
-      splToken: USDC_MINT,
+      spl: USDC_MINT,
       decimals: 6,
     })],
   })

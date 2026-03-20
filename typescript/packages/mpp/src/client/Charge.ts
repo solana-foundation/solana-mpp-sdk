@@ -70,7 +70,7 @@ export function charge(parameters: charge.Parameters) {
             const { amount, currency, recipient, methodDetails } = challenge.request;
             const {
                 network,
-                splToken,
+                spl,
                 decimals,
                 reference,
                 tokenProgram: tokenProgramAddr,
@@ -85,10 +85,10 @@ export function charge(parameters: charge.Parameters) {
             const rpc = createSolanaRpc(rpcUrl);
             onProgress?.({
                 amount,
-                currency: currency || (splToken ? 'token' : 'SOL'),
+                currency: currency || (spl ? 'token' : 'SOL'),
                 feePayerKey: feePayerKey || undefined,
                 recipient,
-                splToken: splToken || undefined,
+                spl: spl || undefined,
                 type: 'challenge',
             });
 
@@ -101,9 +101,9 @@ export function charge(parameters: charge.Parameters) {
             // Build transfer instructions.
             const instructions: Instruction[] = [];
 
-            if (splToken) {
+            if (spl) {
                 // ── SPL token transfers ──
-                const mint = address(splToken);
+                const mint = address(spl);
                 const tokenProg = address(tokenProgramAddr || TOKEN_PROGRAM);
                 const tokenDecimals = decimals ?? 6;
 
@@ -366,7 +366,7 @@ export declare namespace charge {
               currency: string;
               feePayerKey?: string;
               recipient: string;
-              splToken?: string;
+              spl?: string;
               type: 'challenge';
           }
         | { signature: string; type: 'confirming' }

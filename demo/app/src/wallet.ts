@@ -159,7 +159,7 @@ async function getMppx() {
 }
 
 type ProgressEvent =
-  | { type: 'challenge'; recipient: string; amount: string; currency: string; splToken?: string; feePayerKey?: string }
+  | { type: 'challenge'; recipient: string; amount: string; currency: string; spl?: string; feePayerKey?: string }
   | { type: 'signing' }
   | { type: 'signed'; transaction: string }
   | { type: 'paying' }

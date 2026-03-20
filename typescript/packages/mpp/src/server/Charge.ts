@@ -27,7 +27,7 @@ import { coSignBase64Transaction } from '../utils/transactions.js';
  * const mppx = Mppx.create({
  *   methods: [solana.charge({
  *     recipient: 'RecipientPubkey...',
- *     splToken: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+ *     spl: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
  *     decimals: 6,
  *     network: 'devnet',
  *   })],
@@ -43,7 +43,7 @@ import { coSignBase64Transaction } from '../utils/transactions.js';
 export function charge(parameters: charge.Parameters) {
     const {
         recipient,
-        splToken,
+        spl,
         decimals,
         tokenProgram = TOKEN_PROGRAM,
         network = 'mainnet-beta',
@@ -54,8 +54,8 @@ export function charge(parameters: charge.Parameters) {
 
     const rpcUrl = parameters.rpcUrl ?? DEFAULT_RPC_URLS[network] ?? DEFAULT_RPC_URLS['mainnet-beta'];
 
-    if (splToken && decimals === undefined) {
-        throw new Error('decimals is required when splToken is set');
+    if (spl && decimals === undefined) {
+        throw new Error('decimals is required when spl is set');
     }
 
     if (splits && splits.length > 8) {
@@ -70,7 +70,7 @@ export function charge(parameters: charge.Parameters) {
 
     return Method.toServer(Methods.charge, {
         defaults: {
-            currency: splToken ? 'token' : 'SOL',
+            currency: spl ? 'token' : 'SOL',
             methodDetails: {
                 reference: '',
             },
@@ -108,7 +108,7 @@ export function charge(parameters: charge.Parameters) {
                 methodDetails: {
                     network,
                     reference,
-                    ...(splToken ? { decimals, splToken, tokenProgram } : {}),
+                    ...(spl ? { decimals, spl, tokenProgram } : {}),
                     ...(signer ? { feePayer: true, feePayerKey: signer.address } : {}),
                     ...(splits?.length ? { splits } : {}),
                     ...(recentBlockhash ? { recentBlockhash } : {}),
@@ -257,7 +257,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
         throw new Error('Splits consume the entire amount — primary recipient must receive a positive amount');
     }
 
-    if (challenge.methodDetails.splToken) {
+    if (challenge.methodDetails.spl) {
         // ── SPL token transfers verification ──
         const transfers = instructions.filter(
             ix =>
@@ -272,7 +272,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
             transfers,
             recipient,
             String(primaryAmount),
-            challenge.methodDetails.splToken,
+            challenge.methodDetails.spl,
             expectedTokenProgram,
         );
 
@@ -282,7 +282,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
                 transfers,
                 split.recipient,
                 split.amount,
-                challenge.methodDetails.splToken,
+                challenge.methodDetails.spl,
                 expectedTokenProgram,
             );
         }
@@ -304,18 +304,18 @@ async function verifySplTransfer(
     transfers: ParsedInstruction[],
     recipientAddress: string,
     expectedAmount: string,
-    splToken: string,
+    spl: string,
     tokenProgram: string,
 ) {
     const [expectedAta] = await findAssociatedTokenPda({
-        mint: address(splToken),
+        mint: address(spl),
         owner: address(recipientAddress),
         tokenProgram: address(tokenProgram),
     });
 
     const transfer = transfers.find(ix => {
         const info = ix.parsed!.info as { destination: string; mint: string; tokenAmount: { amount: string } };
-        return info.destination === expectedAta && info.mint === splToken;
+        return info.destination === expectedAta && info.mint === spl;
     });
 
     if (!transfer) {
@@ -374,7 +374,7 @@ type ChallengeRequest = {
         network?: string;
         recentBlockhash?: string;
         reference: string;
-        splToken?: string;
+        spl?: string;
         splits?: Array<{ amount: string; memo?: string; recipient: string }>;
         tokenProgram?: string;
     };
@@ -508,7 +508,7 @@ async function waitForConfirmation(rpcUrl: string, signature: string, timeoutMs 
 
 export declare namespace charge {
     type Parameters = {
-        /** Token decimals (required when splToken is set). */
+        /** Token decimals (required when spl is set). */
         decimals?: number;
         /** Solana network. Defaults to 'mainnet-beta'. */
         network?: 'devnet' | 'localnet' | 'mainnet-beta' | (string & {});
@@ -526,7 +526,7 @@ export declare namespace charge {
          */
         signer?: TransactionPartialSigner;
         /** SPL token mint address. If absent, payments are in native SOL. */
-        splToken?: string;
+        spl?: string;
         /** Additional payment splits. Same asset as primary payment. Max 8 entries. */
         splits?: Array<{
             /** Amount in base units (same asset as primary). */

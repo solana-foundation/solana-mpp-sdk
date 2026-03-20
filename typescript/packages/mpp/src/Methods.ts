@@ -49,7 +49,7 @@ export const charge = Method.from({
                 /** Unique reference ID for this charge (server-generated, used for tracking). */
                 reference: z.string(),
                 /** SPL token mint address. If absent, payment is in native SOL. */
-                splToken: z.optional(z.string()),
+                spl: z.optional(z.string()),
                 /** Additional payment splits (max 32). Same asset as primary payment. */
                 splits: z.optional(
                     z.array(

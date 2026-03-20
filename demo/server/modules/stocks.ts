@@ -19,7 +19,7 @@ export function registerStocks(
       recipient,
       network,
       signer: feePayerSigner,
-      splToken: USDC_MINT,
+      spl: USDC_MINT,
       decimals: 6,
     })],
   })

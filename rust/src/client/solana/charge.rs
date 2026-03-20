@@ -64,12 +64,12 @@ pub async fn build_charge_transaction(
     instructions.push(compute_unit_price_ix(1));
     instructions.push(compute_unit_limit_ix(200_000));
 
-    if let Some(spl_token) = &method_details.spl_token {
+    if let Some(spl) = &method_details.spl {
         build_spl_instructions(
             &mut instructions,
             &signer_pubkey,
             &recipient_pubkey,
-            spl_token,
+            spl,
             method_details,
             primary_amount,
             splits,
@@ -191,14 +191,14 @@ fn build_spl_instructions(
     instructions: &mut Vec<Instruction>,
     signer_pubkey: &Pubkey,
     recipient: &Pubkey,
-    spl_token: &str,
+    spl: &str,
     method_details: &SolanaMethodDetails,
     primary_amount: u64,
     splits: &[Split],
     fee_payer: Option<&Pubkey>,
 ) -> Result<(), Error> {
     let mint =
-        Pubkey::from_str(spl_token).map_err(|e| Error::Other(format!("Invalid mint: {e}")))?;
+        Pubkey::from_str(spl).map_err(|e| Error::Other(format!("Invalid mint: {e}")))?;
     let token_program = Pubkey::from_str(
         method_details
             .token_program
