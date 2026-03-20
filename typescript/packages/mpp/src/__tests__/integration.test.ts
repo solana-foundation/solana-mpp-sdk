@@ -333,7 +333,7 @@ beforeAll(async () => {
 
         const result = await mppx.charge({
             amount: '1000000', // 0.001 SOL
-            currency: 'SOL',
+            currency: 'sol',
             description: 'test charge',
         })(webReq);
 
@@ -487,7 +487,7 @@ test('e2e: fee payer mode — server co-signs and pays fees', async () => {
 
         const result = await feePayerMppx.charge({
             amount: '1000000',
-            currency: 'SOL',
+            currency: 'sol',
         })(webReq);
 
         if (result.status === 402) {
@@ -567,7 +567,7 @@ test('e2e: USDC charge via pull mode with fee payer', async () => {
                 recipient: recipientSigner.address,
                 network: 'localnet',
                 rpcUrl: RPC_URL,
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
                 signer: feePayerSigner,
             }),
@@ -580,7 +580,7 @@ test('e2e: USDC charge via pull mode with fee payer', async () => {
 
         const result = await usdcMppx.charge({
             amount: '10000', // 0.01 USDC
-            currency: 'USDC',
+            currency: USDC_MINT,
         })(webReq);
 
         if (result.status === 402) {
@@ -634,7 +634,7 @@ test('e2e: USDC charge with splits (platform fee)', async () => {
                 recipient: recipientSigner.address,
                 network: 'localnet',
                 rpcUrl: RPC_URL,
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
                 signer: feePayerSigner,
                 splits,
@@ -648,7 +648,7 @@ test('e2e: USDC charge with splits (platform fee)', async () => {
 
         const result = await splitsMppx.charge({
             amount: '15000', // 0.015 USDC total (0.01 to recipient + 0.005 to platform)
-            currency: 'USDC',
+            currency: USDC_MINT,
         })(webReq);
 
         if (result.status === 402) {
@@ -711,7 +711,7 @@ test('e2e: native SOL charge with splits', async () => {
 
         const result = await solSplitsMppx.charge({
             amount: '1070000', // 1M to recipient + 50k platform + 20k referrer
-            currency: 'SOL',
+            currency: 'sol',
         })(webReq);
 
         if (result.status === 402) {

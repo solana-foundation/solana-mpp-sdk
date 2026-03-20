@@ -43,7 +43,7 @@ import { coSignBase64Transaction } from '../utils/transactions.js';
 export function charge(parameters: charge.Parameters) {
     const {
         recipient,
-        spl,
+        currency,
         decimals,
         tokenProgram = TOKEN_PROGRAM,
         network = 'mainnet-beta',
@@ -52,10 +52,12 @@ export function charge(parameters: charge.Parameters) {
         signer,
     } = parameters;
 
+    const isSplToken = currency !== undefined && currency !== 'sol';
+
     const rpcUrl = parameters.rpcUrl ?? DEFAULT_RPC_URLS[network] ?? DEFAULT_RPC_URLS['mainnet-beta'];
 
-    if (spl && decimals === undefined) {
-        throw new Error('decimals is required when spl is set');
+    if (isSplToken && decimals === undefined) {
+        throw new Error('decimals is required when currency is a token mint address');
     }
 
     if (splits && splits.length > 8) {
@@ -70,7 +72,7 @@ export function charge(parameters: charge.Parameters) {
 
     return Method.toServer(Methods.charge, {
         defaults: {
-            currency: spl ? 'token' : 'SOL',
+            currency: currency ?? 'sol',
             methodDetails: {
                 reference: '',
             },
@@ -108,7 +110,7 @@ export function charge(parameters: charge.Parameters) {
                 methodDetails: {
                     network,
                     reference,
-                    ...(spl ? { decimals, spl, tokenProgram } : {}),
+                    ...(isSplToken ? { decimals, tokenProgram } : {}),
                     ...(signer ? { feePayer: true, feePayerKey: signer.address } : {}),
                     ...(splits?.length ? { splits } : {}),
                     ...(recentBlockhash ? { recentBlockhash } : {}),
@@ -257,7 +259,9 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
         throw new Error('Splits consume the entire amount — primary recipient must receive a positive amount');
     }
 
-    if (challenge.methodDetails.spl) {
+    const mint = challenge.currency !== 'sol' ? challenge.currency : undefined;
+
+    if (mint) {
         // ── SPL token transfers verification ──
         const transfers = instructions.filter(
             ix =>
@@ -268,23 +272,11 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
         const expectedTokenProgram = challenge.methodDetails.tokenProgram || TOKEN_PROGRAM;
 
         // Verify primary transfer to recipient.
-        await verifySplTransfer(
-            transfers,
-            recipient,
-            String(primaryAmount),
-            challenge.methodDetails.spl,
-            expectedTokenProgram,
-        );
+        await verifySplTransfer(transfers, recipient, String(primaryAmount), mint, expectedTokenProgram);
 
         // Verify each split transfer.
         for (const split of splits) {
-            await verifySplTransfer(
-                transfers,
-                split.recipient,
-                split.amount,
-                challenge.methodDetails.spl,
-                expectedTokenProgram,
-            );
+            await verifySplTransfer(transfers, split.recipient, split.amount, mint, expectedTokenProgram);
         }
     } else {
         // ── Native SOL transfers verification ──
@@ -374,7 +366,6 @@ type ChallengeRequest = {
         network?: string;
         recentBlockhash?: string;
         reference: string;
-        spl?: string;
         splits?: Array<{ amount: string; memo?: string; recipient: string }>;
         tokenProgram?: string;
     };
@@ -508,7 +499,12 @@ async function waitForConfirmation(rpcUrl: string, signature: string, timeoutMs 
 
 export declare namespace charge {
     type Parameters = {
-        /** Token decimals (required when spl is set). */
+        /**
+         * Currency identifier. "SOL" for native SOL, or a base58-encoded
+         * SPL token mint address (e.g. USDC mint). Defaults to "SOL".
+         */
+        currency?: string;
+        /** Token decimals (required when currency is a mint address). */
         decimals?: number;
         /** Solana network. Defaults to 'mainnet-beta'. */
         network?: 'devnet' | 'localnet' | 'mainnet-beta' | (string & {});
@@ -525,8 +521,6 @@ export declare namespace charge {
          * Accepts any TransactionPartialSigner — KeyPairSigner, Keychain SolanaSigner, etc.
          */
         signer?: TransactionPartialSigner;
-        /** SPL token mint address. If absent, payments are in native SOL. */
-        spl?: string;
         /** Additional payment splits. Same asset as primary payment. Max 8 entries. */
         splits?: Array<{
             /** Amount in base units (same asset as primary). */

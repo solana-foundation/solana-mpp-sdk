@@ -24,27 +24,28 @@ function signatureCredential(
     sig: string,
     overrides: {
         amount?: string;
+        currency?: string;
         recipient?: string;
         reference?: string;
-        spl?: string;
         decimals?: number;
         tokenProgram?: string;
         splits?: Array<{ recipient: string; amount: string; memo?: string }>;
     } = {},
 ) {
+    const curr = overrides.currency ?? 'sol';
+    const isSpl = curr !== 'sol';
     return {
         payload: { type: 'signature', signature: sig },
         challenge: {
             request: {
                 amount: overrides.amount ?? '1000000',
-                currency: overrides.spl ? 'token' : 'SOL',
+                currency: curr,
                 recipient: overrides.recipient ?? RECIPIENT,
                 methodDetails: {
                     reference: overrides.reference ?? 'ref-1',
                     network: 'devnet',
-                    ...(overrides.spl
+                    ...(isSpl
                         ? {
-                              spl: overrides.spl,
                               decimals: overrides.decimals ?? 6,
                               tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM,
                           }
@@ -61,26 +62,27 @@ function transactionCredential(
     txBase64: string,
     overrides: {
         amount?: string;
+        currency?: string;
         recipient?: string;
         reference?: string;
-        spl?: string;
         decimals?: number;
         tokenProgram?: string;
     } = {},
 ) {
+    const curr = overrides.currency ?? 'sol';
+    const isSpl = curr !== 'sol';
     return {
         payload: { type: 'transaction', transaction: txBase64 },
         challenge: {
             request: {
                 amount: overrides.amount ?? '1000000',
-                currency: overrides.spl ? 'token' : 'SOL',
+                currency: curr,
                 recipient: overrides.recipient ?? RECIPIENT,
                 methodDetails: {
                     reference: overrides.reference ?? 'ref-1',
                     network: 'devnet',
-                    ...(overrides.spl
+                    ...(isSpl
                         ? {
-                              spl: overrides.spl,
                               decimals: overrides.decimals ?? 6,
                               tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM,
                           }
@@ -163,11 +165,11 @@ afterEach(() => {
 
 // ── Parameter validation ──
 
-test('charge() throws when spl is set but decimals is missing', () => {
+test('charge() throws when currency is a mint but decimals is missing', () => {
     expect(() =>
         charge({
             recipient: RECIPIENT,
-            spl: USDC_MINT,
+            currency: USDC_MINT,
             // decimals intentionally omitted
             network: 'devnet',
             store,
@@ -175,7 +177,7 @@ test('charge() throws when spl is set but decimals is missing', () => {
     ).toThrow(/decimals is required/);
 });
 
-test('charge() does not throw for native SOL (no spl)', () => {
+test('charge() does not throw for native SOL', () => {
     expect(() =>
         charge({
             recipient: RECIPIENT,
@@ -194,7 +196,7 @@ test('request() generates a unique reference and populates fields', async () => 
 
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         store,
@@ -204,17 +206,17 @@ test('request() generates a unique reference and populates fields', async () => 
 
     const request1 = await method.request!({
         credential: null,
-        request: { amount: '1000000', currency: 'USDC', recipient: '', methodDetails: stub },
+        request: { amount: '1000000', currency: USDC_MINT, recipient: '', methodDetails: stub },
     });
 
     const request2 = await method.request!({
         credential: null,
-        request: { amount: '500000', currency: 'USDC', recipient: '', methodDetails: stub },
+        request: { amount: '500000', currency: USDC_MINT, recipient: '', methodDetails: stub },
     });
 
     expect(request1.recipient).toBe(RECIPIENT);
     expect(request1.methodDetails.network).toBe('devnet');
-    expect(request1.methodDetails.spl).toBe(USDC_MINT);
+    // currency is now top-level, not in methodDetails;
     expect(request1.methodDetails.decimals).toBe(6);
     expect(request1.methodDetails.reference).toBeTruthy();
     expect(request1.methodDetails.recentBlockhash).toBeTruthy();
@@ -231,7 +233,7 @@ test('request() returns the challenge request when credential is present', async
 
     const challengeRequest = {
         amount: '1000000',
-        currency: 'SOL',
+        currency: 'sol',
         recipient: RECIPIENT,
         methodDetails: {
             reference: 'existing-ref',
@@ -241,7 +243,7 @@ test('request() returns the challenge request when credential is present', async
 
     const result = await method.request!({
         credential: { challenge: { request: challengeRequest } } as any,
-        request: { amount: '1000000', currency: 'SOL', recipient: '', methodDetails: { reference: '' } },
+        request: { amount: '1000000', currency: 'sol', recipient: '', methodDetails: { reference: '' } },
     });
 
     expect(result.methodDetails.reference).toBe('existing-ref');
@@ -313,7 +315,7 @@ test('signature: rejects SOL transfer with wrong amount', async () => {
 test('signature: accepts valid SPL token transfer', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -331,7 +333,7 @@ test('signature: accepts valid SPL token transfer', async () => {
     const receipt = await method.verify({
         credential: signatureCredential(SIGNATURE, {
             amount: '1000000',
-            spl: USDC_MINT,
+            currency: USDC_MINT,
             decimals: 6,
         }),
         request: {} as any,
@@ -344,7 +346,7 @@ test('signature: accepts valid SPL token transfer', async () => {
 test('signature: rejects SPL transfer with wrong mint', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -364,7 +366,7 @@ test('signature: rejects SPL transfer with wrong mint', async () => {
         method.verify({
             credential: signatureCredential(SIGNATURE, {
                 amount: '1000000',
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
             }),
             request: {} as any,
@@ -375,7 +377,7 @@ test('signature: rejects SPL transfer with wrong mint', async () => {
 test('signature: rejects SPL transfer with wrong amount', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -394,7 +396,7 @@ test('signature: rejects SPL transfer with wrong amount', async () => {
         method.verify({
             credential: signatureCredential(SIGNATURE, {
                 amount: '1000000',
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
             }),
             request: {} as any,
@@ -405,7 +407,7 @@ test('signature: rejects SPL transfer with wrong amount', async () => {
 test('signature: rejects SPL transfer with wrong destination ATA', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -419,7 +421,7 @@ test('signature: rejects SPL transfer with wrong destination ATA', async () => {
         method.verify({
             credential: signatureCredential(SIGNATURE, {
                 amount: '1000000',
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
             }),
             request: {} as any,
@@ -539,7 +541,7 @@ test('signature: throws when no transfer instruction found (SOL)', async () => {
 test('signature: throws when no TransferChecked instruction found (SPL)', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -556,7 +558,7 @@ test('signature: throws when no TransferChecked instruction found (SPL)', async 
         method.verify({
             credential: signatureCredential(SIGNATURE, {
                 amount: '1000000',
-                spl: USDC_MINT,
+                currency: USDC_MINT,
                 decimals: 6,
             }),
             request: {} as any,
@@ -624,7 +626,7 @@ test('pull: accepts valid native SOL transfer', async () => {
 test('pull: accepts valid SPL token transfer', async () => {
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -642,7 +644,7 @@ test('pull: accepts valid SPL token transfer', async () => {
     const receipt = await method.verify({
         credential: transactionCredential(FAKE_TX_BASE64, {
             amount: '1000000',
-            spl: USDC_MINT,
+            currency: USDC_MINT,
             decimals: 6,
         }),
         request: {} as any,
@@ -703,7 +705,7 @@ test('transaction: throws when transaction data is missing', async () => {
                 challenge: {
                     request: {
                         amount: '1000000',
-                        currency: 'SOL',
+                        currency: 'sol',
                         recipient: RECIPIENT,
                         methodDetails: {
                             reference: 'ref-1',
@@ -742,7 +744,7 @@ test('splits: request() includes splits in challenge', async () => {
 
     const request = await method.request!({
         credential: null,
-        request: { amount: '1050000', currency: 'SOL', recipient: '', methodDetails: { reference: '' } },
+        request: { amount: '1050000', currency: 'sol', recipient: '', methodDetails: { reference: '' } },
     });
 
     expect(request.methodDetails.splits).toBeTruthy();
@@ -873,7 +875,7 @@ test('splits: SPL verification passes with valid primary + split transfers', asy
     const splits = [{ recipient: PLATFORM, amount: '50000' }];
     const method = charge({
         recipient: RECIPIENT,
-        spl: USDC_MINT,
+        currency: USDC_MINT,
         decimals: 6,
         network: 'devnet',
         rpcUrl: 'https://mock-rpc',
@@ -918,7 +920,7 @@ test('splits: SPL verification passes with valid primary + split transfers', asy
         });
 
     const receipt = await method.verify({
-        credential: signatureCredential(SIGNATURE, { amount: '1000000', spl: USDC_MINT, decimals: 6, splits }),
+        credential: signatureCredential(SIGNATURE, { amount: '1000000', currency: USDC_MINT, decimals: 6, splits }),
         request: {} as any,
     });
 

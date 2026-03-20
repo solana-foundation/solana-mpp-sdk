@@ -70,7 +70,6 @@ export function charge(parameters: charge.Parameters) {
             const { amount, currency, recipient, methodDetails } = challenge.request;
             const {
                 network,
-                spl,
                 decimals,
                 reference,
                 tokenProgram: tokenProgramAddr,
@@ -80,15 +79,17 @@ export function charge(parameters: charge.Parameters) {
                 splits,
             } = methodDetails;
 
+            // currency is "sol" for native, or the mint address for SPL tokens.
+            const mint = currency !== 'sol' ? currency : undefined;
+
             const rpcUrl =
                 parameters.rpcUrl ?? DEFAULT_RPC_URLS[network || 'mainnet-beta'] ?? DEFAULT_RPC_URLS['mainnet-beta'];
             const rpc = createSolanaRpc(rpcUrl);
             onProgress?.({
                 amount,
-                currency: currency || (spl ? 'token' : 'SOL'),
+                currency,
                 feePayerKey: feePayerKey || undefined,
                 recipient,
-                spl: spl || undefined,
                 type: 'challenge',
             });
 
@@ -101,14 +102,14 @@ export function charge(parameters: charge.Parameters) {
             // Build transfer instructions.
             const instructions: Instruction[] = [];
 
-            if (spl) {
+            if (mint) {
                 // ── SPL token transfers ──
-                const mint = address(spl);
+                const mintAddress = address(mint);
                 const tokenProg = address(tokenProgramAddr || TOKEN_PROGRAM);
                 const tokenDecimals = decimals ?? 6;
 
                 const [sourceAta] = await findAssociatedTokenPda({
-                    mint,
+                    mint: mintAddress,
                     owner: signer.address,
                     tokenProgram: tokenProg,
                 });
@@ -116,7 +117,7 @@ export function charge(parameters: charge.Parameters) {
                 // Helper: add ATA creation + transferChecked for a recipient.
                 const addSplTransfer = async (dest: string, transferAmount: bigint) => {
                     const [destAta] = await findAssociatedTokenPda({
-                        mint,
+                        mint: mintAddress,
                         owner: address(dest),
                         tokenProgram: tokenProg,
                     });
@@ -127,7 +128,7 @@ export function charge(parameters: charge.Parameters) {
                             createAssociatedTokenAccountIdempotent(
                                 address(feePayerKey),
                                 address(dest),
-                                mint,
+                                mintAddress,
                                 destAta,
                                 tokenProg,
                             ),
@@ -136,7 +137,7 @@ export function charge(parameters: charge.Parameters) {
                         instructions.push(
                             getCreateAssociatedTokenIdempotentInstruction({
                                 ata: destAta,
-                                mint,
+                                mint: mintAddress,
                                 owner: address(dest),
                                 payer: signer,
                                 tokenProgram: tokenProg,
@@ -151,7 +152,7 @@ export function charge(parameters: charge.Parameters) {
                                 authority: signer,
                                 decimals: tokenDecimals,
                                 destination: destAta,
-                                mint,
+                                mint: mintAddress,
                                 source: sourceAta,
                             },
                             { programAddress: tokenProg },
@@ -366,7 +367,6 @@ export declare namespace charge {
               currency: string;
               feePayerKey?: string;
               recipient: string;
-              spl?: string;
               type: 'challenge';
           }
         | { signature: string; type: 'confirming' }

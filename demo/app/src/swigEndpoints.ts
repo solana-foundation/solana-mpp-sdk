@@ -13,7 +13,7 @@ export const SWIG_ENDPOINTS: Endpoint[] = [
     path: '/api/v1/swig/risk/:symbol',
     description: 'Session-backed risk snapshot',
     cost: '0.01 USDC / request',
-    params: [{ name: 'symbol', default: 'SOL' }],
+    params: [{ name: 'symbol', default: 'sol' }],
   },
 ]
 

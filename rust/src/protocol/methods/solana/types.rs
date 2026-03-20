@@ -35,11 +35,7 @@ pub struct SolanaMethodDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
 
-    /// SPL token mint address. If absent, payment is in native SOL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spl: Option<String>,
-
-    /// Token decimals (required when spl is set).
+    /// Token decimals (required when currency is a mint address).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u8>,
 
@@ -103,8 +99,8 @@ pub struct SolanaChargeConfig {
     pub network: String,
     /// RPC URL (overrides default for the network).
     pub rpc_url: Option<String>,
-    /// SPL token mint address.
-    pub spl: Option<String>,
+    /// Currency: "sol" for native, or a mint address for SPL tokens.
+    pub currency: String,
     /// Token decimals.
     pub decimals: Option<u8>,
     /// Token program address.

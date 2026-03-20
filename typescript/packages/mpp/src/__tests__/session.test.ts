@@ -97,7 +97,7 @@ test('request() populates recipient/network/asset/channel metadata', async () =>
     const method = session({
         recipient: RECIPIENT,
         network: NETWORK,
-        asset: { kind: 'sol', decimals: 9, symbol: 'SOL' },
+        asset: { kind: 'sol', decimals: 9, symbol: 'sol' },
         channelProgram: CHANNEL_PROGRAM,
         pricing: {
             unit: 'request',
@@ -128,7 +128,7 @@ test('request() populates recipient/network/asset/channel metadata', async () =>
 
     expect(request.recipient).toBe(RECIPIENT);
     expect(request.network).toBe(NETWORK);
-    expect(request.asset).toEqual({ kind: 'sol', decimals: 9, symbol: 'SOL' });
+    expect(request.asset).toEqual({ kind: 'sol', decimals: 9, symbol: 'sol' });
     expect(request.channelProgram).toBe(CHANNEL_PROGRAM);
     expect(request.pricing).toEqual({
         unit: 'request',

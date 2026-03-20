@@ -88,7 +88,7 @@ function Playground() {
               )
               .catch(() => {});
           }
-          const decimals = step.currency === "SOL" ? 9 : 6;
+          const decimals = step.currency === "sol" ? 9 : 6;
           const human = (Number(step.amount) / 10 ** decimals).toFixed(
             decimals === 9 ? 4 : 2,
           );

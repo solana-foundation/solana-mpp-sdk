@@ -20,6 +20,7 @@ pub async fn build_charge_transaction(
     signer: &dyn SolanaSigner,
     rpc: &RpcClient,
     amount: &str,
+    currency: &str,
     recipient: &str,
     method_details: &SolanaMethodDetails,
 ) -> Result<CredentialPayload, Error> {
@@ -64,12 +65,14 @@ pub async fn build_charge_transaction(
     instructions.push(compute_unit_price_ix(1));
     instructions.push(compute_unit_limit_ix(200_000));
 
-    if let Some(spl) = &method_details.spl {
+    let mint = if currency != "sol" { Some(currency) } else { None };
+
+    if let Some(mint_str) = mint {
         build_spl_instructions(
             &mut instructions,
             &signer_pubkey,
             &recipient_pubkey,
-            spl,
+            mint_str,
             method_details,
             primary_amount,
             splits,
