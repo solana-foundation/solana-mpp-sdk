@@ -15,7 +15,9 @@ pub struct PaymentChannel {
     pub payer: Pubkey,
     /// The wallet authorized to settle and close the channel.
     pub payee: Pubkey,
-    /// The SPL token mint (or system program for native SOL).
+    /// The SPL token mint. Native SOL is not currently supported — all channels
+    /// use SPL tokens via transfer_checked and ATA-backed vaults.
+    /// TODO: add a separate native SOL path (wrapping or system-program transfer).
     pub token: Pubkey,
     /// The key permitted to sign vouchers. Equals payer unless delegated.
     pub authorized_signer: Pubkey,

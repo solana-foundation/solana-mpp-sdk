@@ -1,6 +1,8 @@
+import { getBase58Encoder } from '@solana/kit';
 import type { TransactionPartialSigner } from '@solana/kit';
 
 import { coSignBase64Transaction } from '../utils/transactions.js';
+import { DISCRIMINATOR_OPEN, DISCRIMINATOR_TOP_UP } from './MppChannelClient.js';
 
 /**
  * Create a TransactionHandler for session open and topUp operations.
@@ -10,20 +12,34 @@ import { coSignBase64Transaction } from '../utils/transactions.js';
  * 2. Simulate to catch errors before broadcast
  * 3. Broadcast via sendTransaction
  * 4. Poll getSignatureStatuses for confirmation
- * 5. Verify the confirmed transaction targets the expected channel program
+ * 5. Semantically verify the confirmed transaction: discriminator, amounts, and key accounts
  * 6. Return the confirmed signature
+ *
+ * The semantic verification (step 5) checks that the confirmed transaction:
+ * - Invokes the expected channel program
+ * - Contains the correct Anchor discriminator (open or top_up, not an arbitrary instruction)
+ * - Carries the correct deposit/amount as encoded in the Borsh instruction data
+ * - Uses the expected payee and token mint (open only)
+ *
+ * Without these checks, a client could submit a transaction that merely touches
+ * the program with different arguments, causing the server to track channel state
+ * that diverges from on-chain reality.
  */
 export function createSessionTransactionHandler(params: {
     channelProgram: string;
+    /** Base58 payee public key. Used to verify the payee account in open transactions. */
+    recipient: string;
+    /** SPL token mint address, or 'sol' for native SOL (not yet supported on-chain). */
+    currency: string;
     rpcUrl: string;
     signer?: TransactionPartialSigner;
 }): {
     handleOpen: (channelId: string, transaction: string, deposit: string) => Promise<string>;
     handleTopUp: (channelId: string, transaction: string, amount: string) => Promise<string>;
 } {
-    const { channelProgram, rpcUrl, signer } = params;
+    const { channelProgram, recipient, currency, rpcUrl, signer } = params;
 
-    async function processTransaction(channelId: string, clientTxBase64: string, label: string): Promise<string> {
+    async function processTransaction(clientTxBase64: string): Promise<string> {
         let txToSend = clientTxBase64;
 
         if (signer) {
@@ -36,40 +52,173 @@ export function createSessionTransactionHandler(params: {
 
         const tx = await fetchTransaction(rpcUrl, signature);
         if (!tx) {
-            throw new Error(`${label} transaction not found after confirmation: ${signature}`);
+            throw new Error(`Transaction not found after confirmation: ${signature}`);
         }
         if (tx.meta?.err) {
-            throw new Error(`${label} transaction failed on-chain: ${JSON.stringify(tx.meta.err)}`);
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(tx.meta.err)}`);
         }
-
-        verifyProgramInvoked(tx, channelProgram, label);
 
         return signature;
     }
 
     return {
-        async handleOpen(channelId, transaction, _deposit) {
-            return await processTransaction(channelId, transaction, 'Open');
+        async handleOpen(_channelId, transaction, deposit) {
+            const signature = await processTransaction(transaction);
+
+            const tx = await fetchTransaction(rpcUrl, signature);
+            if (!tx) throw new Error(`Open transaction not found: ${signature}`);
+
+            verifyOpenInstruction(
+                tx.transaction.message.instructions,
+                channelProgram,
+                recipient,
+                currency,
+                BigInt(deposit),
+            );
+
+            return signature;
         },
-        async handleTopUp(channelId, transaction, _amount) {
-            return await processTransaction(channelId, transaction, 'TopUp');
+        async handleTopUp(_channelId, transaction, amount) {
+            const signature = await processTransaction(transaction);
+
+            const tx = await fetchTransaction(rpcUrl, signature);
+            if (!tx) throw new Error(`TopUp transaction not found: ${signature}`);
+
+            verifyTopUpInstruction(tx.transaction.message.instructions, channelProgram, BigInt(amount));
+
+            return signature;
         },
     };
 }
 
-function verifyProgramInvoked(tx: ParsedTransaction, channelProgram: string, label: string): void {
-    const instructions = tx.transaction.message.instructions;
-    const invokesProgram = instructions.some((ix: { programId?: string }) => ix.programId === channelProgram);
-    if (!invokesProgram) {
-        throw new Error(`${label} transaction does not invoke the expected channel program ${channelProgram}`);
+// ---- Semantic instruction verification ----
+
+/**
+ * Verify that the transaction contains a valid mpp-channel `open` instruction.
+ *
+ * Checks:
+ * - The channel program instruction has the `open` discriminator (not settle, topUp, etc.)
+ * - The deposit encoded in instruction data matches the credential's depositAmount
+ * - accounts[1] (payee) matches the server's configured recipient
+ * - accounts[2] (mint) matches the server's configured currency, if it is an SPL mint address
+ *
+ * Account indices come from open.rs: [payer, payee, mint, channelPda, payerTokenAccount, vault, ...].
+ * Instruction data layout (Borsh): [0..8] discriminator, [8..16] salt (u64 LE), [16..24] deposit (u64 LE).
+ */
+function verifyOpenInstruction(
+    instructions: RawInstruction[],
+    channelProgram: string,
+    expectedPayee: string,
+    currency: string,
+    expectedDeposit: bigint,
+): void {
+    const ix = findChannelInstruction(instructions, channelProgram);
+
+    const data = decodeInstructionData(ix.data, 'open');
+
+    if (!matchesDiscriminator(data, DISCRIMINATOR_OPEN)) {
+        throw new Error(
+            'Open transaction does not contain an open instruction (discriminator mismatch — possible replay with wrong action)',
+        );
+    }
+
+    // deposit is a u64 LE at byte offset 16 (after 8-byte discriminator + 8-byte salt)
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const onChainDeposit = view.getBigUint64(16, true);
+    if (onChainDeposit !== expectedDeposit) {
+        throw new Error(
+            `Open: deposit amount mismatch (on-chain=${onChainDeposit}, payload=${expectedDeposit})`,
+        );
+    }
+
+    const accounts = ix.accounts ?? [];
+
+    if (accounts[1] !== expectedPayee) {
+        throw new Error(
+            `Open: payee mismatch (on-chain=${accounts[1]}, expected=${expectedPayee})`,
+        );
+    }
+
+    // Only verify mint when currency is an SPL mint address (not 'sol').
+    if (currency !== 'sol' && accounts[2] !== currency) {
+        throw new Error(
+            `Open: token mint mismatch (on-chain=${accounts[2]}, expected=${currency})`,
+        );
     }
 }
+
+/**
+ * Verify that the transaction contains a valid mpp-channel `top_up` instruction.
+ *
+ * Checks:
+ * - The channel program instruction has the `top_up` discriminator
+ * - The amount encoded in instruction data matches the credential's additionalAmount
+ *
+ * Instruction data layout (Borsh): [0..8] discriminator, [8..16] amount (u64 LE).
+ */
+function verifyTopUpInstruction(
+    instructions: RawInstruction[],
+    channelProgram: string,
+    expectedAmount: bigint,
+): void {
+    const ix = findChannelInstruction(instructions, channelProgram);
+
+    const data = decodeInstructionData(ix.data, 'topUp');
+
+    if (!matchesDiscriminator(data, DISCRIMINATOR_TOP_UP)) {
+        throw new Error(
+            'TopUp transaction does not contain a top_up instruction (discriminator mismatch)',
+        );
+    }
+
+    // amount is a u64 LE at byte offset 8 (after 8-byte discriminator)
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const onChainAmount = view.getBigUint64(8, true);
+    if (onChainAmount !== expectedAmount) {
+        throw new Error(
+            `TopUp: amount mismatch (on-chain=${onChainAmount}, payload=${expectedAmount})`,
+        );
+    }
+}
+
+function findChannelInstruction(instructions: RawInstruction[], channelProgram: string): RawInstruction {
+    const ix = instructions.find(i => i.programId === channelProgram);
+    if (!ix) {
+        throw new Error(`Transaction does not invoke the expected channel program ${channelProgram}`);
+    }
+    return ix;
+}
+
+function decodeInstructionData(data: string | undefined, label: string): Uint8Array {
+    if (!data) {
+        throw new Error(`${label} instruction is missing data`);
+    }
+    return new Uint8Array(getBase58Encoder().encode(data));
+}
+
+function matchesDiscriminator(data: Uint8Array, discriminator: Uint8Array): boolean {
+    if (data.length < 8) return false;
+    for (let i = 0; i < 8; i++) {
+        if (data[i] !== discriminator[i]) return false;
+    }
+    return true;
+}
+
+// ---- RPC helpers ----
+
+type RawInstruction = {
+    /** Present for non-parsed programs: ordered list of account addresses. */
+    accounts?: string[];
+    /** Present for non-parsed programs: base58-encoded raw instruction data. */
+    data?: string;
+    programId?: string;
+};
 
 type ParsedTransaction = {
     meta: { err: unknown } | null;
     transaction: {
         message: {
-            instructions: Array<{ programId?: string }>;
+            instructions: RawInstruction[];
         };
     };
 };

@@ -8,10 +8,10 @@ const CHANNEL_SEED = 'mpp-channel';
 const INSTRUCTIONS_SYSVAR = address('Sysvar1nstructions1111111111111111111111111');
 
 // Anchor discriminators: sha256("global:<fn_name>")[0..8]
-const DISCRIMINATOR_OPEN = new Uint8Array([228, 220, 155, 71, 199, 189, 60, 45]);
+export const DISCRIMINATOR_OPEN = new Uint8Array([228, 220, 155, 71, 199, 189, 60, 45]);
+export const DISCRIMINATOR_TOP_UP = new Uint8Array([236, 225, 96, 9, 60, 106, 77, 208]);
 const DISCRIMINATOR_SETTLE = new Uint8Array([175, 42, 185, 87, 144, 131, 102, 212]);
 const DISCRIMINATOR_CLOSE = new Uint8Array([98, 165, 201, 177, 108, 65, 206, 96]);
-const DISCRIMINATOR_TOP_UP = new Uint8Array([236, 225, 96, 9, 60, 106, 77, 208]);
 const DISCRIMINATOR_REQUEST_CLOSE = new Uint8Array([82, 168, 167, 86, 14, 15, 199, 180]);
 const DISCRIMINATOR_WITHDRAW = new Uint8Array([183, 18, 70, 156, 148, 109, 161, 34]);
 

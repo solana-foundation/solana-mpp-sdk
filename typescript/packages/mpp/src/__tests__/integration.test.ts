@@ -25,7 +25,7 @@ import { Actions, createEd25519SessionAuthorityInfo } from '@swig-wallet/lib';
 import { Receipt } from 'mppx';
 import { Mppx as ServerMppx, solana as serverSolana, Store } from '../../src/server/index.js';
 import { Mppx as ClientMppx, solana as clientSolana } from '../../src/client/index.js';
-import { BudgetAuthorizer, SwigSessionAuthorizer, UnboundedAuthorizer } from '../../src/index.js';
+import { SwigBudgetAuthorizer, SwigSessionAuthorizer, UnboundedAuthorizer } from '../../src/index.js';
 import * as SessionChannelStore from '../../src/session/ChannelStore.js';
 
 const RPC_URL = 'http://localhost:8899';
@@ -1082,8 +1082,6 @@ test('e2e: session close can include on-chain settlement transaction', async () 
             },
             rpcUrl: RPC_URL,
             allowedPrograms: [SESSION_CHANNEL_PROGRAM],
-            buildCloseTx: async ({ finalCumulativeAmount }) =>
-                await swig.spendFromSwig(BigInt(finalCumulativeAmount ?? '0'), recipientSigner.address),
         });
 
         const clientMethod = clientSolana.session({
@@ -1133,7 +1131,7 @@ test('e2e: session regular_budget mode enforces on-chain Swig role limits', asyn
     });
 
     try {
-        const authorizer = new BudgetAuthorizer({
+        const authorizer = new SwigBudgetAuthorizer({
             signer: clientSigner,
             maxCumulativeAmount: '1000',
             swig: {
@@ -1254,7 +1252,7 @@ test('e2e: session regular_budget mode rejects unknown configured Swig role', as
     });
 
     try {
-        const authorizer = new BudgetAuthorizer({
+        const authorizer = new SwigBudgetAuthorizer({
             signer: clientSigner,
             maxCumulativeAmount: '1000',
             swig: {

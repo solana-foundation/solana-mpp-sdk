@@ -61,9 +61,8 @@ type ChannelProgress = {
     swigRoleId?: number;
 };
 
-export interface BudgetAuthorizerParameters {
+export interface SwigBudgetAuthorizerParameters {
     allowedPrograms?: string[];
-    buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
     buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     maxCumulativeAmount: string;
@@ -75,7 +74,7 @@ export interface BudgetAuthorizerParameters {
     validUntil?: string;
 }
 
-export class BudgetAuthorizer implements SessionAuthorizer {
+export class SwigBudgetAuthorizer implements SessionAuthorizer {
     private readonly signer: MessagePartialSigner;
     private readonly maxCumulativeAmount: bigint;
     private readonly maxDepositAmount?: bigint;
@@ -85,15 +84,14 @@ export class BudgetAuthorizer implements SessionAuthorizer {
     private readonly swig: SwigOnChainRoleConfig;
     private readonly buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
     private readonly buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
-    private readonly buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     private readonly channels = new Map<string, ChannelProgress>();
     private readonly capabilities: AuthorizerCapabilities;
     private swigLoaded = false;
     private swigModule: BudgetSwigModule | null = null;
 
-    constructor(parameters: BudgetAuthorizerParameters) {
+    constructor(parameters: SwigBudgetAuthorizerParameters) {
         if (!parameters.swig) {
-            throw new Error('BudgetAuthorizer requires `swig` configuration with on-chain role details');
+            throw new Error('SwigBudgetAuthorizer requires `swig` configuration with on-chain role details');
         }
 
         if (!Number.isInteger(parameters.swig.swigRoleId) || parameters.swig.swigRoleId < 0) {
@@ -125,7 +123,6 @@ export class BudgetAuthorizer implements SessionAuthorizer {
         }
         this.buildOpenTx = parameters.buildOpenTx;
         this.buildTopUpTx = parameters.buildTopUpTx;
-        this.buildCloseTx = parameters.buildCloseTx;
 
         this.capabilities = {
             mode: 'regular_budget',
@@ -277,17 +274,12 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             ...(this.validUntil ? { expiresAt: this.validUntil } : {}),
         });
 
-        const closeTx = this.buildCloseTx ? await this.buildCloseTx(input) : undefined;
-
         this.channels.set(input.channelId, {
             ...progress,
             lastCumulative: finalCumulativeAmount,
         });
 
-        return {
-            voucher,
-            ...(closeTx ? { closeTx } : {}),
-        };
+        return { voucher };
     }
 
     private assertNotExpired() {
@@ -342,7 +334,7 @@ export class BudgetAuthorizer implements SessionAuthorizer {
 
         if (onChainLimit === null) {
             throw new Error(
-                `Swig role ${role.id} has uncapped spending; BudgetAuthorizer requires an on-chain spend cap`,
+                `Swig role ${role.id} has uncapped spending; SwigBudgetAuthorizer requires an on-chain spend cap`,
             );
         }
 
@@ -424,14 +416,14 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             this.swigLoaded = true;
         } catch {
             throw new Error(
-                'BudgetAuthorizer with `swig` config requires optional dependency `@swig-wallet/kit`. Install it with `npm install @swig-wallet/kit`.',
+                'SwigBudgetAuthorizer with `swig` config requires optional dependency `@swig-wallet/kit`. Install it with `npm install @swig-wallet/kit`.',
             );
         }
     }
 
     private async resolveOpenTx(input: AuthorizeOpenInput): Promise<string> {
         if (!this.buildOpenTx) {
-            throw new Error('BudgetAuthorizer requires `buildOpenTx` to authorize open requests');
+            throw new Error('SwigBudgetAuthorizer requires `buildOpenTx` to authorize open requests');
         }
 
         return await this.buildOpenTx(input);
@@ -439,7 +431,7 @@ export class BudgetAuthorizer implements SessionAuthorizer {
 
     private async resolveTopUpTx(input: AuthorizeTopUpInput): Promise<string> {
         if (!this.buildTopUpTx) {
-            throw new Error('BudgetAuthorizer requires `buildTopUpTx` to authorize topUp requests');
+            throw new Error('SwigBudgetAuthorizer requires `buildTopUpTx` to authorize topUp requests');
         }
 
         return await this.buildTopUpTx(input);

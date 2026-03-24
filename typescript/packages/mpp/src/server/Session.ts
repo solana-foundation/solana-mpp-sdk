@@ -168,6 +168,8 @@ async function handleOpen(
 
     const nextState: ChannelState = {
         acceptedCumulative: cumulativeAmount.toString(),
+        // authorizationPolicy is stored for custom verifiers (e.g. SwigSessionAuthorizer).
+        // It is not enforced by the built-in ed25519 verification path.
         ...(payload.authorizationPolicy ? { authorizationPolicy: payload.authorizationPolicy } : {}),
         authorizedSigner: voucher.signer,
         channelId: payload.channelId,
@@ -233,9 +235,17 @@ async function handleVoucher(
     const escrowedAmount = parseNonNegativeAmount(channel.escrowedAmount, 'channel.escrowedAmount');
     const acceptedCumulative = parseNonNegativeAmount(channel.acceptedCumulative, 'channel.acceptedCumulative');
 
-    // Idempotent: if cumulativeAmount <= acceptedCumulative, return success without state change.
-    if (cumulativeAmount <= acceptedCumulative) {
+    // Idempotent retry: equal cumulative amount is a re-send of an already-accepted voucher.
+    if (cumulativeAmount === acceptedCumulative) {
         return toSessionReceipt(payload.channelId, channel.acceptedCumulative, channel.spentAmount, challengeId);
+    }
+
+    // Reject stale vouchers. A lower amount was already superseded — accepting it would
+    // authorize no new value while still allowing the resource to be served.
+    if (cumulativeAmount < acceptedCumulative) {
+        throw new Error(
+            `Voucher cumulative amount must not decrease (received ${cumulativeAmount}, accepted ${acceptedCumulative})`,
+        );
     }
 
     if (cumulativeAmount > escrowedAmount) {
@@ -256,9 +266,15 @@ async function handleVoucher(
 
         const currentAccepted = parseNonNegativeAmount(current.acceptedCumulative, 'channel.acceptedCumulative');
 
-        // Re-check idempotency inside atomic update.
-        if (cumulativeAmount <= currentAccepted) {
+        // Re-check inside atomic update (idempotent retry — another request may have raced ahead).
+        if (cumulativeAmount === currentAccepted) {
             return current;
+        }
+
+        if (cumulativeAmount < currentAccepted) {
+            throw new Error(
+                `Voucher cumulative amount must not decrease (received ${cumulativeAmount}, accepted ${currentAccepted})`,
+            );
         }
 
         const currentEscrowed = parseNonNegativeAmount(current.escrowedAmount, 'channel.escrowedAmount');
@@ -414,6 +430,12 @@ function assertSessionParameters(parameters: session.Parameters) {
     if (!parameters.amount.trim()) {
         throw new Error('amount is required');
     }
+
+    if (parameters.currency.toLowerCase() === 'sol') {
+        throw new Error(
+            'Native SOL is not supported by the mpp-channel program. Provide an SPL token mint address as `currency`.',
+        );
+    }
 }
 
 function assertChannelOpen(channel: ChannelState) {
@@ -463,11 +485,11 @@ async function verifySignedVoucher(
 }
 
 function assertSignerAuthorized(voucher: SignedSessionVoucher, channel: ChannelState) {
-    const signer = voucher.signer;
-
-    // The voucher signer must match the channel's authorizedSigner.
-    if (signer !== channel.authorizedSigner && signer !== channel.payer) {
-        throw new Error(`Voucher signer ${signer} does not match authorized signer ${channel.authorizedSigner}`);
+    // authorizedSigner is established from the open voucher's signer. For standard channels
+    // it equals the payer; for delegated channels (e.g. Swig session keys) it is the delegated
+    // key. There is no payer fallback — authorizedSigner is the definitive authority.
+    if (voucher.signer !== channel.authorizedSigner) {
+        throw new Error(`Voucher signer ${voucher.signer} does not match authorized signer ${channel.authorizedSigner}`);
     }
 }
 

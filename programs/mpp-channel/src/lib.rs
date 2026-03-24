@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-pub mod binary_voucher;
+pub mod jcs_voucher;
 pub mod ed25519;
 pub mod errors;
 pub mod events;

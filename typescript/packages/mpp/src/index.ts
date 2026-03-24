@@ -24,7 +24,7 @@ export type {
 } from './session/Types.js';
 
 export {
-    BudgetAuthorizer,
+    SwigBudgetAuthorizer,
     SwigSessionAuthorizer,
     UnboundedAuthorizer,
     makeSessionAuthorizer,

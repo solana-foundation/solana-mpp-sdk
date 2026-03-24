@@ -8,6 +8,7 @@ import type { ChannelState, SignedSessionVoucher } from '../session/Types.js';
 
 const RECIPIENT = '9xAXssX9j7vuK99c7cFwqbixzL3bFrzPy9PUhCtDPAYJ';
 const CHANNEL_PROGRAM = 'swigypWHEksbC64pWKwah1WTeh9JXwx8H1rJHLdbQMB';
+const TOKEN_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC mint (mock SPL address for tests)
 
 type ChallengeRequest = {
     amount: string;
@@ -78,7 +79,7 @@ test('session() throws when currency is empty', () => {
 test('request() populates recipient/currency/amount/channelProgram metadata', async () => {
     const method = session({
         recipient: RECIPIENT,
-        currency: 'sol',
+        currency: TOKEN_MINT,
         amount: '10',
         channelProgram: CHANNEL_PROGRAM,
         suggestedDeposit: '1000',
@@ -97,7 +98,7 @@ test('request() populates recipient/currency/amount/channelProgram metadata', as
     });
 
     expect(request.recipient).toBe(RECIPIENT);
-    expect(request.currency).toBe('sol');
+    expect(request.currency).toBe(TOKEN_MINT);
     expect(request.amount).toBe('10');
     expect(request.methodDetails.channelProgram).toBe(CHANNEL_PROGRAM);
     expect(request.suggestedDeposit).toBe('1000');
@@ -166,7 +167,7 @@ test('voucher flow enforces cumulative monotonicity', async () => {
     expect(channelAfterFirst!.acceptedCumulative).toBe('300');
 });
 
-test('voucher is idempotent for same or lower cumulative amount', async () => {
+test('voucher is idempotent for same cumulative amount and rejects lower', async () => {
     const channelId = `channel-idempotent-${crypto.randomUUID()}`;
     const method = createMethod();
 
@@ -189,14 +190,13 @@ test('voucher is idempotent for same or lower cumulative amount', async () => {
     const channelAfter = await getChannel(channelId);
     expect(channelAfter!.acceptedCumulative).toBe('300');
 
-    // Lower amount: also idempotent success.
-    const lowerResult = await method.verify({
-        credential: await buildVoucherCredential({ channelId, cumulativeAmount: '200' }),
-        request: buildChallengeRequest(),
-    });
-    expect(lowerResult.status).toBe('success');
-    const channelAfterLower = await getChannel(channelId);
-    expect(channelAfterLower!.acceptedCumulative).toBe('300');
+    // Lower amount: rejected — cumulative must not decrease.
+    await expect(
+        method.verify({
+            credential: await buildVoucherCredential({ channelId, cumulativeAmount: '200' }),
+            request: buildChallengeRequest(),
+        }),
+    ).rejects.toThrow(/cumulative amount must not decrease/);
 });
 
 test('rejects voucher on channel with pending forced close', async () => {
@@ -596,7 +596,7 @@ test('open flow rejects when transactionHandler.handleOpen throws', async () => 
 function createMethod(overrides: Partial<session.Parameters> = {}) {
     return session({
         recipient: RECIPIENT,
-        currency: 'sol',
+        currency: TOKEN_MINT,
         amount: '10',
         channelProgram: CHANNEL_PROGRAM,
         store,
@@ -607,7 +607,7 @@ function createMethod(overrides: Partial<session.Parameters> = {}) {
 function buildChallengeRequest(overrides: Partial<ChallengeRequest> = {}): ChallengeRequest {
     return {
         amount: '10',
-        currency: 'sol',
+        currency: TOKEN_MINT,
         recipient: RECIPIENT,
         methodDetails: { channelProgram: CHANNEL_PROGRAM, network: 'devnet' },
         ...overrides,

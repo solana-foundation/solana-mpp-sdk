@@ -81,7 +81,6 @@ export interface SwigWalletAdapter {
 
 export interface SwigSessionAuthorizerParameters {
     allowedPrograms?: string[];
-    buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
     buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     policy: SwigPolicy;
@@ -99,7 +98,6 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
     private readonly depositLimit?: bigint;
     private readonly buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
     private readonly buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
-    private readonly buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     private readonly channels = new Map<string, ChannelProgress>();
 
     private swigLoaded = false;
@@ -133,7 +131,6 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
                 : undefined;
         this.buildOpenTx = parameters.buildOpenTx;
         this.buildTopUpTx = parameters.buildTopUpTx;
-        this.buildCloseTx = parameters.buildCloseTx;
     }
 
     getMode() {
@@ -293,12 +290,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
                   : {}),
         });
 
-        const closeTx = this.buildCloseTx ? await this.buildCloseTx(input) : undefined;
-
-        return {
-            voucher,
-            ...(closeTx ? { closeTx } : {}),
-        };
+        return { voucher };
     }
 
     private async signSwigVoucher(signer: KeyPairSigner, voucher: SessionVoucher): Promise<SignedSessionVoucher> {

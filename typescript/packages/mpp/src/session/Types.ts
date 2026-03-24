@@ -127,7 +127,6 @@ export interface AuthorizeCloseInput {
 }
 
 export interface AuthorizedClose {
-    closeTx?: string;
     voucher?: SignedSessionVoucher;
 }
 

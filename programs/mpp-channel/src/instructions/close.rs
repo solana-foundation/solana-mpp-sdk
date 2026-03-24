@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-use crate::binary_voucher::{parse_jcs_voucher_message, verify_channel_id};
+use crate::jcs_voucher::{parse_jcs_voucher_message, verify_channel_id};
 use crate::ed25519::validate_ed25519_instruction;
 use crate::errors::MppChannelError;
 use crate::events::ChannelClosed;
