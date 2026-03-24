@@ -17,14 +17,6 @@ Solana payment method for the [Machine Payments Protocol](https://mpp.dev).
 pnpm add @solana/mpp
 ```
 
-Peer dependencies:
-
-```bash
-pnpm add @solana/kit mppx
-# Optional — for Swig session authorization:
-pnpm add @swig-wallet/kit
-```
-
 ## Features
 
 **Charge** (one-time payments)

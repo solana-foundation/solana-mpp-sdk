@@ -95,51 +95,55 @@ jobs:
       - name: Pack tarball
         run: |
           mkdir -p .npm-pack
-          cd typescript/packages/mpp && pnpm pack --pack-destination ../../../.npm-pack
+          pnpm --dir typescript/packages/mpp pack --pack-destination "$(pwd)/.npm-pack"
+          TARBALL=$(find .npm-pack -maxdepth 1 -name '*.tgz' -print -quit)
+
+          if [ -z "$TARBALL" ]; then
+            echo "FAIL: no tarball produced in .npm-pack"
+            ls -la .npm-pack/ || true
+            exit 1
+          fi
+
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo ""
           echo "Packed tarball:"
           ls -la .npm-pack/
 
       - name: "Guard - Fail if tarball contains workspace: protocol"
         run: |
-          for tarball in .npm-pack/*.tgz; do
-            tar -xzf "$tarball" package/package.json -O > /tmp/pkg.json
+          tar -xzf "$TARBALL" package/package.json -O > /tmp/pkg.json
 
-            if grep -q '"workspace:' /tmp/pkg.json; then
-              echo "FAIL: ${tarball} contains workspace: dependencies!"
-              grep '"workspace:' /tmp/pkg.json || true
-              exit 1
-            fi
-          done
+          if grep -q '"workspace:' /tmp/pkg.json; then
+            echo "FAIL: ${TARBALL} contains workspace: dependencies!"
+            grep '"workspace:' /tmp/pkg.json || true
+            exit 1
+          fi
 
           echo "All tarballs are clean (no workspace: dependencies)"
 
       - name: Guard - Fail if tarball missing dist/ artifacts
         run: |
-          for tarball in .npm-pack/*.tgz; do
-            CONTENTS=$(tar -tzf "$tarball")
+          CONTENTS=$(tar -tzf "$TARBALL")
 
-            if ! echo "$CONTENTS" | grep -q "package/dist/index.js"; then
-              echo "FAIL: ${tarball} is missing dist/index.js!"
-              echo "Contents:"
-              echo "$CONTENTS" | head -30
-              exit 1
-            fi
+          if ! echo "$CONTENTS" | grep -q "package/dist/index.js"; then
+            echo "FAIL: ${TARBALL} is missing dist/index.js!"
+            echo "Contents:"
+            echo "$CONTENTS" | head -30
+            exit 1
+          fi
 
-            if ! echo "$CONTENTS" | grep -q "package/dist/index.d.ts"; then
-              echo "FAIL: ${tarball} is missing dist/index.d.ts!"
-              exit 1
-            fi
+          if ! echo "$CONTENTS" | grep -q "package/dist/index.d.ts"; then
+            echo "FAIL: ${TARBALL} is missing dist/index.d.ts!"
+            exit 1
+          fi
 
-            echo "dist/index.js and dist/index.d.ts present"
-          done
+          echo "dist/index.js and dist/index.d.ts present"
 
       - name: Publish to npm
         if: ${{ github.event.inputs.publish-to-npm == 'true' }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NPM_TAG="${{ steps.prerelease.outputs.npm_tag }}"
-          TARBALL=".npm-pack/solana-mpp-${VERSION}.tgz"
 
           if [ -f "$TARBALL" ]; then
             echo "Publishing ${TARBALL} with tag '${NPM_TAG}'..."
