@@ -1,6 +1,5 @@
 import { Method, Receipt, Store } from 'mppx';
 
-import { DEFAULT_RPC_URLS } from '../constants.js';
 import * as Methods from '../Methods.js';
 import * as ChannelStore from '../session/ChannelStore.js';
 import type {
@@ -11,38 +10,26 @@ import type {
 } from '../session/Types.js';
 import { parseVoucherFromPayload, verifyVoucherSignature } from '../session/Voucher.js';
 
-type SessionAsset = {
-    decimals: number;
-    kind: 'sol' | 'spl';
-    mint?: string;
-    symbol?: string;
-};
-
-type SessionPricing = {
-    amountPerUnit: string;
-    meter: string;
-    minDebit?: string;
-    unit: string;
-};
-
-type SessionDefaults = {
-    closeBehavior?: 'payer_must_close' | 'server_may_finalize';
-    settleInterval?: { kind: string; minIncrement?: string; seconds?: number };
-    suggestedDeposit?: string;
-    ttlSeconds?: number;
-};
-
 type SessionRequest = {
-    asset: SessionAsset;
-    channelProgram: string;
-    network?: string;
-    pricing?: SessionPricing;
-    recipient: string;
-    sessionDefaults?: SessionDefaults;
-    verifier?: {
-        acceptAuthorizationModes?: Array<'regular_budget' | 'regular_unbounded' | 'swig_session'>;
-        maxClockSkewSeconds?: number;
+    amount: string;
+    currency: string;
+    description?: string;
+    externalId?: string;
+    methodDetails: {
+        channelId?: string;
+        channelProgram: string;
+        decimals?: number;
+        feePayer?: boolean;
+        feePayerKey?: string;
+        gracePeriodSeconds?: number;
+        minVoucherDelta?: string;
+        network?: string;
+        tokenProgram?: string;
+        ttlSeconds?: number;
     };
+    recipient: string;
+    suggestedDeposit?: string;
+    unitType?: string;
 };
 
 type SessionChallenge = {
@@ -51,32 +38,30 @@ type SessionChallenge = {
 };
 
 type OpenPayload = Extract<SessionCredentialPayload, { action: 'open' }>;
-type UpdatePayload = Extract<SessionCredentialPayload, { action: 'update' }>;
-type TopupPayload = Extract<SessionCredentialPayload, { action: 'topup' }>;
+type VoucherPayload = Extract<SessionCredentialPayload, { action: 'voucher' }>;
+type TopUpPayload = Extract<SessionCredentialPayload, { action: 'topUp' }>;
 type ClosePayload = Extract<SessionCredentialPayload, { action: 'close' }>;
 
-type TransactionVerifier = {
-    verifyClose?(channelId: string, closeTx: string, finalCumulativeAmount: string): Promise<void>;
-    verifyOpen?(channelId: string, openTx: string, deposit: string): Promise<void>;
-    verifyTopup?(channelId: string, topupTx: string, amount: string): Promise<void>;
+type TransactionHandler = {
+    /** Inspect and broadcast a partially-signed open transaction. Returns the confirmed signature. */
+    handleOpen?(channelId: string, transaction: string, deposit: string): Promise<string>;
+    /** Inspect and broadcast a partially-signed top-up transaction. Returns the confirmed signature. */
+    handleTopUp?(channelId: string, transaction: string, amount: string): Promise<string>;
 };
 
 export function session(parameters: session.Parameters) {
-    const { recipient, network = 'mainnet-beta', asset, channelProgram, store = Store.memory() } = parameters;
+    const { recipient, currency, channelProgram, store = Store.memory() } = parameters;
+    const network = parameters.network ?? 'mainnet-beta';
 
     assertSessionParameters(parameters);
-
-    const resolvedRpcUrl = parameters.rpcUrl ?? DEFAULT_RPC_URLS[network] ?? DEFAULT_RPC_URLS['mainnet-beta'];
-    if (!resolvedRpcUrl) {
-        throw new Error(`Unable to resolve RPC URL for network: ${network}`);
-    }
 
     const channelStore = ChannelStore.fromStore(store);
 
     return Method.toServer(Methods.session, {
         defaults: {
-            asset: { decimals: 9, kind: 'sol' as const },
-            channelProgram: '',
+            amount: '0',
+            currency: '',
+            methodDetails: { channelProgram: '' },
             recipient: '',
         },
 
@@ -85,17 +70,24 @@ export function session(parameters: session.Parameters) {
                 return credential.challenge.request as typeof request;
             }
 
-            const verifierRequest = toVerifierRequest(parameters.verifier);
-
             return {
                 ...request,
-                asset,
-                channelProgram,
-                network,
+                amount: parameters.amount,
+                currency,
+                methodDetails: {
+                    channelProgram,
+                    ...(parameters.decimals !== undefined ? { decimals: parameters.decimals } : {}),
+                    ...(parameters.feePayer ? { feePayer: true, feePayerKey: parameters.feePayerKey } : {}),
+                    ...(parameters.gracePeriodSeconds !== undefined
+                        ? { gracePeriodSeconds: parameters.gracePeriodSeconds }
+                        : {}),
+                    ...(parameters.minVoucherDelta ? { minVoucherDelta: parameters.minVoucherDelta } : {}),
+                    network,
+                    ...(parameters.ttlSeconds !== undefined ? { ttlSeconds: parameters.ttlSeconds } : {}),
+                },
                 recipient,
-                ...(parameters.pricing ? { pricing: parameters.pricing } : {}),
-                ...(parameters.sessionDefaults ? { sessionDefaults: parameters.sessionDefaults } : {}),
-                ...(verifierRequest ? { verifier: verifierRequest } : {}),
+                ...(parameters.suggestedDeposit ? { suggestedDeposit: parameters.suggestedDeposit } : {}),
+                ...(parameters.unitType ? { unitType: parameters.unitType } : {}),
             };
         },
 
@@ -106,7 +98,7 @@ export function session(parameters: session.Parameters) {
                 return new Response(null, { status: 204 });
             }
 
-            if (payload.action === 'topup') {
+            if (payload.action === 'topUp') {
                 return new Response(null, { status: 204 });
             }
 
@@ -120,13 +112,13 @@ export function session(parameters: session.Parameters) {
 
             switch (payload.action) {
                 case 'open':
-                    return await handleOpen(channelStore, payload, challenge, recipient, parameters, challengeId);
-                case 'update':
-                    return await handleUpdate(channelStore, payload, challenge, parameters, challengeId);
-                case 'topup':
-                    return await handleTopup(channelStore, payload, parameters, challengeId);
+                    return await handleOpen(channelStore, payload, challenge, parameters, challengeId);
+                case 'voucher':
+                    return await handleVoucher(channelStore, payload, parameters, challengeId);
+                case 'topUp':
+                    return await handleTopUp(channelStore, payload, parameters, challengeId);
                 case 'close':
-                    return await handleClose(channelStore, payload, challenge, parameters, challengeId);
+                    return await handleClose(channelStore, payload, parameters, challengeId);
                 default: {
                     const exhaustive: never = payload;
                     throw new Error(`Unknown session action: ${(exhaustive as { action?: string }).action}`);
@@ -140,89 +132,61 @@ async function handleOpen(
     channelStore: ChannelStore.ChannelStore,
     payload: OpenPayload,
     challenge: SessionChallenge,
-    configuredRecipient: string,
     parameters: session.Parameters,
     challengeId?: string,
 ) {
-    const request = challenge.request;
     const voucher = parseVoucherFromPayload(payload);
 
     const depositAmount = parseNonNegativeAmount(payload.depositAmount, 'depositAmount');
     const cumulativeAmount = parseNonNegativeAmount(voucher.voucher.cumulativeAmount, 'voucher.cumulativeAmount');
 
-    if (!payload.openTx.trim()) {
-        throw new Error('openTx is required for session open');
+    if (!payload.transaction.trim()) {
+        throw new Error('transaction is required for session open');
     }
-
-    await parameters.transactionVerifier?.verifyOpen?.(payload.channelId, payload.openTx, payload.depositAmount);
 
     if (voucher.voucher.channelId !== payload.channelId) {
         throw new Error('Voucher channelId mismatch for open action');
-    }
-
-    if (voucher.voucher.payer !== payload.payer) {
-        throw new Error('Voucher payer mismatch for open action');
-    }
-
-    if (voucher.voucher.recipient !== configuredRecipient) {
-        throw new Error('Voucher recipient does not match configured recipient');
-    }
-
-    if (voucher.voucher.recipient !== request.recipient) {
-        throw new Error('Voucher recipient does not match challenge recipient');
-    }
-
-    if (voucher.voucher.channelProgram !== request.channelProgram) {
-        throw new Error('Voucher channelProgram mismatch');
-    }
-
-    const expectedChainId = normalizeChainId(request.network ?? 'mainnet-beta');
-    if (voucher.voucher.chainId !== expectedChainId) {
-        throw new Error(`Voucher chainId mismatch: expected ${expectedChainId}, received ${voucher.voucher.chainId}`);
     }
 
     if (cumulativeAmount > depositAmount) {
         throw new Error('Voucher cumulative amount exceeds channel deposit');
     }
 
-    if (
-        parameters.verifier?.acceptAuthorizationModes &&
-        !parameters.verifier.acceptAuthorizationModes.includes(payload.authorizationMode)
-    ) {
-        throw new Error(`Authorization mode not accepted: ${payload.authorizationMode}`);
+    assertVoucherNotExpired(voucher, parameters.maxClockSkewSeconds);
+
+    // Inspect and broadcast the partially-signed transaction via the handler.
+    let openTxSignature: string | undefined;
+    if (parameters.transactionHandler?.handleOpen) {
+        openTxSignature = await parameters.transactionHandler.handleOpen(
+            payload.channelId,
+            payload.transaction,
+            payload.depositAmount,
+        );
     }
 
-    assertVoucherNotExpired(voucher, parameters.verifier?.maxClockSkewSeconds);
-
     const createdAt = new Date().toISOString();
-    const expiresAtUnix = toUnixSeconds(payload.expiresAt ?? voucher.voucher.expiresAt);
 
     const nextState: ChannelState = {
-        asset: {
-            decimals: request.asset.decimals,
-            kind: request.asset.kind,
-            ...(request.asset.mint ? { mint: request.asset.mint } : {}),
-        },
-        authority: {
-            wallet: payload.payer,
-            ...(payload.authorizationMode === 'swig_session' ? { delegatedSessionKey: voucher.signer } : {}),
-        },
-        authorizationMode: payload.authorizationMode,
+        acceptedCumulative: cumulativeAmount.toString(),
+        // authorizationPolicy is stored for custom verifiers (e.g. SwigSessionAuthorizer).
+        // It is not enforced by the built-in ed25519 verification path.
+        ...(payload.authorizationPolicy ? { authorizationPolicy: payload.authorizationPolicy } : {}),
+        authorizedSigner: voucher.signer,
         channelId: payload.channelId,
+        closeRequestedAt: 0,
         createdAt,
+        currency: parameters.currency,
+        decimals: parameters.decimals ?? 9,
         escrowedAmount: depositAmount.toString(),
-        expiresAtUnix,
-        lastAuthorizedAmount: cumulativeAmount.toString(),
-        lastSequence: voucher.voucher.sequence,
-        openSlot: Date.now(),
+        finalized: false,
+        payee: parameters.recipient,
         payer: payload.payer,
-        recipient: request.recipient,
-        serverNonce: voucher.voucher.serverNonce,
-        settledAmount: '0',
+        settledOnChain: '0',
+        spentAmount: '0',
         status: 'open',
     };
 
-    await verifySignedVoucher(voucher, nextState, parameters.verifier?.voucherVerifier);
+    await verifySignedVoucher(voucher, nextState, parameters.voucherVerifier);
 
     await channelStore.updateChannel(payload.channelId, current => {
         if (current) {
@@ -232,13 +196,17 @@ async function handleOpen(
         return nextState;
     });
 
-    return toSuccessReceipt(payload.channelId, challengeId);
+    return toSessionReceipt(
+        openTxSignature ?? payload.channelId,
+        nextState.acceptedCumulative,
+        nextState.spentAmount,
+        challengeId,
+    );
 }
 
-async function handleUpdate(
+async function handleVoucher(
     channelStore: ChannelStore.ChannelStore,
-    payload: UpdatePayload,
-    challenge: SessionChallenge,
+    payload: VoucherPayload,
     parameters: session.Parameters,
     challengeId?: string,
 ) {
@@ -247,72 +215,90 @@ async function handleUpdate(
         throw new Error(`Channel not found: ${payload.channelId}`);
     }
 
-    assertChannelOpen(channel, parameters.verifier?.maxClockSkewSeconds);
+    assertChannelOpen(channel);
+
+    // Reject new vouchers on channels with a pending forced close.
+    if (channel.closeRequestedAt > 0) {
+        throw new Error(`Channel has a pending forced close (requested at ${channel.closeRequestedAt})`);
+    }
 
     const voucher = parseVoucherFromPayload(payload);
-    assertVoucherMatchesChannel(voucher, channel, challenge);
-    assertVoucherNotExpired(voucher, parameters.verifier?.maxClockSkewSeconds);
+    assertVoucherNotExpired(voucher, parameters.maxClockSkewSeconds);
+
+    if (voucher.voucher.channelId !== channel.channelId) {
+        throw new Error('Voucher channelId mismatch');
+    }
+
+    await verifySignedVoucher(voucher, channel, parameters.voucherVerifier);
 
     const cumulativeAmount = parseNonNegativeAmount(voucher.voucher.cumulativeAmount, 'voucher.cumulativeAmount');
     const escrowedAmount = parseNonNegativeAmount(channel.escrowedAmount, 'channel.escrowedAmount');
-    const lastAuthorizedAmount = parseNonNegativeAmount(channel.lastAuthorizedAmount, 'channel.lastAuthorizedAmount');
+    const acceptedCumulative = parseNonNegativeAmount(channel.acceptedCumulative, 'channel.acceptedCumulative');
 
-    if (voucher.voucher.sequence <= channel.lastSequence) {
-        throw new Error(
-            `Voucher sequence replay detected. Last=${channel.lastSequence}, received=${voucher.voucher.sequence}`,
-        );
+    // Idempotent retry: equal cumulative amount is a re-send of an already-accepted voucher.
+    if (cumulativeAmount === acceptedCumulative) {
+        return toSessionReceipt(payload.channelId, channel.acceptedCumulative, channel.spentAmount, challengeId);
     }
 
-    if (cumulativeAmount < lastAuthorizedAmount) {
-        throw new Error('Voucher cumulative amount must be monotonically non-decreasing');
+    // Reject stale vouchers. A lower amount was already superseded — accepting it would
+    // authorize no new value while still allowing the resource to be served.
+    if (cumulativeAmount < acceptedCumulative) {
+        throw new Error(
+            `Voucher cumulative amount must not decrease (received ${cumulativeAmount}, accepted ${acceptedCumulative})`,
+        );
     }
 
     if (cumulativeAmount > escrowedAmount) {
         throw new Error('Voucher cumulative amount exceeds channel deposit');
     }
 
-    await verifySignedVoucher(voucher, channel, parameters.verifier?.voucherVerifier);
-
-    await channelStore.updateChannel(payload.channelId, current => {
+    const updatedChannel = await channelStore.updateChannel(payload.channelId, current => {
         if (!current) {
             throw new Error(`Channel not found: ${payload.channelId}`);
         }
 
-        assertChannelOpen(current, parameters.verifier?.maxClockSkewSeconds);
+        assertChannelOpen(current);
 
-        if (voucher.voucher.sequence <= current.lastSequence) {
+        // Re-check closeRequestedAt inside atomic update (TOCTOU guard).
+        if (current.closeRequestedAt > 0) {
+            throw new Error(`Channel has a pending forced close (requested at ${current.closeRequestedAt})`);
+        }
+
+        const currentAccepted = parseNonNegativeAmount(current.acceptedCumulative, 'channel.acceptedCumulative');
+
+        // Re-check inside atomic update (idempotent retry — another request may have raced ahead).
+        if (cumulativeAmount === currentAccepted) {
+            return current;
+        }
+
+        if (cumulativeAmount < currentAccepted) {
             throw new Error(
-                `Voucher sequence replay detected. Last=${current.lastSequence}, received=${voucher.voucher.sequence}`,
+                `Voucher cumulative amount must not decrease (received ${cumulativeAmount}, accepted ${currentAccepted})`,
             );
         }
 
         const currentEscrowed = parseNonNegativeAmount(current.escrowedAmount, 'channel.escrowedAmount');
-        const currentLastAuthorized = parseNonNegativeAmount(
-            current.lastAuthorizedAmount,
-            'channel.lastAuthorizedAmount',
-        );
-
-        if (cumulativeAmount < currentLastAuthorized) {
-            throw new Error('Voucher cumulative amount must be monotonically non-decreasing');
-        }
-
         if (cumulativeAmount > currentEscrowed) {
             throw new Error('Voucher cumulative amount exceeds channel deposit');
         }
 
         return {
             ...current,
-            lastAuthorizedAmount: cumulativeAmount.toString(),
-            lastSequence: voucher.voucher.sequence,
+            acceptedCumulative: cumulativeAmount.toString(),
         };
     });
 
-    return toSuccessReceipt(payload.channelId, challengeId);
+    return toSessionReceipt(
+        payload.channelId,
+        updatedChannel?.acceptedCumulative ?? cumulativeAmount.toString(),
+        updatedChannel?.spentAmount ?? '0',
+        challengeId,
+    );
 }
 
-async function handleTopup(
+async function handleTopUp(
     channelStore: ChannelStore.ChannelStore,
-    payload: TopupPayload,
+    payload: TopUpPayload,
     parameters: session.Parameters,
     challengeId?: string,
 ) {
@@ -323,41 +309,48 @@ async function handleTopup(
 
     assertChannelOpen(current);
 
-    if (!payload.topupTx.trim()) {
-        throw new Error('topupTx is required for session topup');
+    if (!payload.transaction.trim()) {
+        throw new Error('transaction is required for session topUp');
     }
 
     const additionalAmount = parseNonNegativeAmount(payload.additionalAmount, 'additionalAmount');
 
-    await parameters.transactionVerifier?.verifyTopup?.(payload.channelId, payload.topupTx, payload.additionalAmount);
+    if (parameters.transactionHandler?.handleTopUp) {
+        await parameters.transactionHandler.handleTopUp(
+            payload.channelId,
+            payload.transaction,
+            payload.additionalAmount,
+        );
+    }
 
-    await channelStore.updateChannel(payload.channelId, channel => {
+    const updatedChannel = await channelStore.updateChannel(payload.channelId, channel => {
         if (!channel) {
             throw new Error(`Channel not found: ${payload.channelId}`);
         }
 
         assertChannelOpen(channel);
 
-        if (channel.channelId !== payload.channelId) {
-            throw new Error('Channel id mismatch for topup action');
-        }
-
         const escrowedAmount = parseNonNegativeAmount(channel.escrowedAmount, 'channel.escrowedAmount');
         const nextEscrowed = escrowedAmount + additionalAmount;
 
         return {
             ...channel,
+            closeRequestedAt: 0,
             escrowedAmount: nextEscrowed.toString(),
         };
     });
 
-    return toSuccessReceipt(payload.channelId, challengeId);
+    return toSessionReceipt(
+        payload.channelId,
+        updatedChannel?.acceptedCumulative ?? current.acceptedCumulative,
+        updatedChannel?.spentAmount ?? current.spentAmount,
+        challengeId,
+    );
 }
 
 async function handleClose(
     channelStore: ChannelStore.ChannelStore,
     payload: ClosePayload,
-    challenge: SessionChallenge,
     parameters: session.Parameters,
     challengeId?: string,
 ) {
@@ -370,84 +363,55 @@ async function handleClose(
         throw new Error(`Channel already closed: ${payload.channelId}`);
     }
 
-    assertChannelOpen(channel, parameters.verifier?.maxClockSkewSeconds);
+    assertChannelOpen(channel);
 
-    const voucher = parseVoucherFromPayload(payload);
-    assertVoucherMatchesChannel(voucher, channel, challenge);
-    assertVoucherNotExpired(voucher, parameters.verifier?.maxClockSkewSeconds);
+    // Close voucher is optional. If provided, validate and update accepted cumulative.
+    if (payload.voucher) {
+        const voucher = parseVoucherFromPayload(payload.voucher);
+        assertVoucherNotExpired(voucher, parameters.maxClockSkewSeconds);
 
-    const cumulativeAmount = parseNonNegativeAmount(voucher.voucher.cumulativeAmount, 'voucher.cumulativeAmount');
-    const escrowedAmount = parseNonNegativeAmount(channel.escrowedAmount, 'channel.escrowedAmount');
-    const lastAuthorizedAmount = parseNonNegativeAmount(channel.lastAuthorizedAmount, 'channel.lastAuthorizedAmount');
-
-    if (voucher.voucher.sequence <= channel.lastSequence) {
-        throw new Error(
-            `Voucher sequence replay detected. Last=${channel.lastSequence}, received=${voucher.voucher.sequence}`,
-        );
-    }
-
-    if (cumulativeAmount < lastAuthorizedAmount) {
-        throw new Error('Voucher cumulative amount must be monotonically non-decreasing');
-    }
-
-    if (cumulativeAmount > escrowedAmount) {
-        throw new Error('Voucher cumulative amount exceeds channel deposit');
-    }
-
-    if (parameters.transactionVerifier?.verifyClose) {
-        if (!payload.closeTx?.trim()) {
-            throw new Error('closeTx is required for session close');
+        if (voucher.voucher.channelId !== channel.channelId) {
+            throw new Error('Voucher channelId mismatch');
         }
 
-        await parameters.transactionVerifier.verifyClose(
-            payload.channelId,
-            payload.closeTx,
-            voucher.voucher.cumulativeAmount,
-        );
-    }
+        const cumulativeAmount = parseNonNegativeAmount(voucher.voucher.cumulativeAmount, 'voucher.cumulativeAmount');
+        const escrowedAmount = parseNonNegativeAmount(channel.escrowedAmount, 'channel.escrowedAmount');
 
-    await verifySignedVoucher(voucher, channel, parameters.verifier?.voucherVerifier);
-
-    await channelStore.updateChannel(payload.channelId, current => {
-        if (!current) {
-            throw new Error(`Channel not found: ${payload.channelId}`);
-        }
-
-        if (current.status === 'closed') {
-            throw new Error(`Channel already closed: ${payload.channelId}`);
-        }
-
-        assertChannelOpen(current, parameters.verifier?.maxClockSkewSeconds);
-
-        if (voucher.voucher.sequence <= current.lastSequence) {
-            throw new Error(
-                `Voucher sequence replay detected. Last=${current.lastSequence}, received=${voucher.voucher.sequence}`,
-            );
-        }
-
-        const currentEscrowed = parseNonNegativeAmount(current.escrowedAmount, 'channel.escrowedAmount');
-        const currentLastAuthorized = parseNonNegativeAmount(
-            current.lastAuthorizedAmount,
-            'channel.lastAuthorizedAmount',
-        );
-
-        if (cumulativeAmount < currentLastAuthorized) {
-            throw new Error('Voucher cumulative amount must be monotonically non-decreasing');
-        }
-
-        if (cumulativeAmount > currentEscrowed) {
+        if (cumulativeAmount > escrowedAmount) {
             throw new Error('Voucher cumulative amount exceeds channel deposit');
         }
 
-        return {
-            ...current,
-            lastAuthorizedAmount: cumulativeAmount.toString(),
-            lastSequence: voucher.voucher.sequence,
-            status: 'closed',
-        };
-    });
+        await verifySignedVoucher(voucher, channel, parameters.voucherVerifier);
 
-    return toSuccessReceipt(payload.closeTx ?? payload.channelId, challengeId);
+        await channelStore.updateChannel(payload.channelId, current => {
+            if (!current || current.status === 'closed') {
+                throw new Error(`Channel already closed: ${payload.channelId}`);
+            }
+
+            const currentAccepted = parseNonNegativeAmount(current.acceptedCumulative, 'channel.acceptedCumulative');
+
+            return {
+                ...current,
+                acceptedCumulative:
+                    cumulativeAmount > currentAccepted ? cumulativeAmount.toString() : current.acceptedCumulative,
+                status: 'closed',
+            };
+        });
+    } else {
+        // Close without voucher: just mark closed.
+        await channelStore.updateChannel(payload.channelId, current => {
+            if (!current || current.status === 'closed') {
+                throw new Error(`Channel already closed: ${payload.channelId}`);
+            }
+
+            return {
+                ...current,
+                status: 'closed',
+            };
+        });
+    }
+
+    return toSessionReceipt(payload.channelId, channel.acceptedCumulative, channel.spentAmount, challengeId);
 }
 
 function assertSessionParameters(parameters: session.Parameters) {
@@ -459,114 +423,24 @@ function assertSessionParameters(parameters: session.Parameters) {
         throw new Error('channelProgram is required');
     }
 
-    if (!Number.isInteger(parameters.asset.decimals) || parameters.asset.decimals < 0) {
-        throw new Error('asset.decimals must be a non-negative integer');
+    if (!parameters.currency.trim()) {
+        throw new Error('currency is required');
     }
 
-    if (parameters.asset.kind !== 'sol' && parameters.asset.kind !== 'spl') {
-        throw new Error('asset.kind must be "sol" or "spl"');
+    if (!parameters.amount.trim()) {
+        throw new Error('amount is required');
     }
 
-    if (parameters.asset.kind === 'spl' && !parameters.asset.mint) {
-        throw new Error('asset.mint is required when asset.kind is "spl"');
-    }
-
-    if (
-        parameters.verifier?.maxClockSkewSeconds !== undefined &&
-        (!Number.isInteger(parameters.verifier.maxClockSkewSeconds) || parameters.verifier.maxClockSkewSeconds < 0)
-    ) {
-        throw new Error('verifier.maxClockSkewSeconds must be a non-negative integer');
+    if (parameters.currency.toLowerCase() === 'sol') {
+        throw new Error(
+            'Native SOL is not supported by the mpp-channel program. Provide an SPL token mint address as `currency`.',
+        );
     }
 }
 
-function toVerifierRequest(verifier: session.Parameters['verifier']) {
-    if (!verifier) {
-        return undefined;
-    }
-
-    const requestVerifier: SessionRequest['verifier'] = {
-        ...(verifier.acceptAuthorizationModes ? { acceptAuthorizationModes: verifier.acceptAuthorizationModes } : {}),
-        ...(verifier.maxClockSkewSeconds !== undefined ? { maxClockSkewSeconds: verifier.maxClockSkewSeconds } : {}),
-    };
-
-    if (!requestVerifier.acceptAuthorizationModes && requestVerifier.maxClockSkewSeconds === undefined) {
-        return undefined;
-    }
-
-    return requestVerifier;
-}
-
-function normalizeChainId(network: string): string {
-    const normalized = network.trim();
-    if (normalized.length === 0) {
-        throw new Error('network must be a non-empty string');
-    }
-
-    return normalized.startsWith('solana:') ? normalized : `solana:${normalized}`;
-}
-
-function toUnixSeconds(expiresAt?: string): number | null {
-    if (!expiresAt) {
-        return null;
-    }
-
-    const unixMs = Date.parse(expiresAt);
-    if (Number.isNaN(unixMs)) {
-        throw new Error('expiresAt must be a valid ISO timestamp');
-    }
-
-    return Math.floor(unixMs / 1000);
-}
-
-function assertChannelOpen(channel: ChannelState, maxClockSkewSeconds = 0) {
-    if (channel.status === 'closed') {
+function assertChannelOpen(channel: ChannelState) {
+    if (channel.status === 'closed' || channel.finalized) {
         throw new Error(`Channel is closed: ${channel.channelId}`);
-    }
-
-    if (channel.status === 'expired') {
-        throw new Error(`Channel has expired: ${channel.channelId}`);
-    }
-
-    if (channel.status !== 'open') {
-        throw new Error(`Channel must be open to accept this action. Current status=${channel.status}`);
-    }
-
-    if (channel.expiresAtUnix !== null) {
-        const nowUnix = Math.floor(Date.now() / 1000);
-        if (nowUnix > channel.expiresAtUnix + maxClockSkewSeconds) {
-            throw new Error(`Channel has expired: ${channel.channelId}`);
-        }
-    }
-}
-
-function assertVoucherMatchesChannel(
-    voucher: SignedSessionVoucher,
-    channel: ChannelState,
-    challenge: SessionChallenge,
-) {
-    if (voucher.voucher.channelId !== channel.channelId) {
-        throw new Error('Voucher channelId mismatch');
-    }
-
-    if (voucher.voucher.payer !== channel.payer) {
-        throw new Error('Voucher payer mismatch');
-    }
-
-    if (voucher.voucher.recipient !== channel.recipient) {
-        throw new Error('Voucher recipient mismatch');
-    }
-
-    if (voucher.voucher.serverNonce !== channel.serverNonce) {
-        throw new Error('Voucher serverNonce mismatch');
-    }
-
-    if (voucher.voucher.channelProgram !== challenge.request.channelProgram) {
-        throw new Error('Voucher channelProgram mismatch');
-    }
-
-    const expectedChainId = normalizeChainId(challenge.request.network ?? 'mainnet-beta');
-    if (voucher.voucher.chainId !== expectedChainId) {
-        throw new Error(`Voucher chainId mismatch: expected ${expectedChainId}, received ${voucher.voucher.chainId}`);
     }
 }
 
@@ -590,7 +464,6 @@ async function verifySignedVoucher(
     channel: ChannelState,
     customVerifier?: VoucherVerifier,
 ) {
-    // Bind signer to channel authority — reject rogue signers
     assertSignerAuthorized(voucher, channel);
 
     if (voucher.signatureType === 'ed25519' || voucher.signatureType === 'swig-session') {
@@ -612,23 +485,11 @@ async function verifySignedVoucher(
 }
 
 function assertSignerAuthorized(voucher: SignedSessionVoucher, channel: ChannelState) {
-    const signer = voucher.signer;
-
-    if (channel.authorizationMode === 'swig_session') {
-        // For swig_session mode, the signer must be the delegated session key
-        const expectedKey = channel.authority.delegatedSessionKey;
-        if (!expectedKey) {
-            throw new Error('Channel uses swig_session authorization but no delegated session key is recorded');
-        }
-        if (signer !== expectedKey) {
-            throw new Error(`Voucher signer ${signer} does not match delegated session key ${expectedKey}`);
-        }
-        return;
-    }
-
-    // For regular_budget and regular_unbounded, the signer must be the channel payer
-    if (signer !== channel.payer && signer !== channel.authority.wallet) {
-        throw new Error(`Voucher signer ${signer} does not match channel payer ${channel.payer}`);
+    // authorizedSigner is established from the open voucher's signer. For standard channels
+    // it equals the payer; for delegated channels (e.g. Swig session keys) it is the delegated
+    // key. There is no payer fallback — authorizedSigner is the definitive authority.
+    if (voucher.signer !== channel.authorizedSigner) {
+        throw new Error(`Voucher signer ${voucher.signer} does not match authorized signer ${channel.authorizedSigner}`);
     }
 }
 
@@ -647,11 +508,16 @@ function parseNonNegativeAmount(value: string, field: string): bigint {
     return parsed;
 }
 
-function toSuccessReceipt(channelId: string, challengeId?: string): Receipt.Receipt {
+function toSessionReceipt(
+    reference: string,
+    _acceptedCumulative: string,
+    _spent: string,
+    challengeId?: string,
+): Receipt.Receipt {
     return Receipt.from({
         method: 'solana',
-        ...(challengeId ? { challengeId } : {}),
-        reference: channelId,
+        ...(challengeId ? { externalId: challengeId } : {}),
+        reference,
         status: 'success',
         timestamp: new Date().toISOString(),
     });
@@ -659,29 +525,41 @@ function toSuccessReceipt(channelId: string, challengeId?: string): Receipt.Rece
 
 export declare namespace session {
     type Parameters = {
-        asset: { decimals: number; kind: 'sol' | 'spl'; mint?: string; symbol?: string };
+        /** Price per unit in token base units. */
+        amount: string;
+        /** Channel program address. */
         channelProgram: string;
+        /** Currency identifier: "sol" or SPL mint address. */
+        currency: string;
+        /** Token decimals (required for SPL tokens). */
+        decimals?: number;
+        /** If true, server pays transaction fees. */
+        feePayer?: boolean;
+        /** Server's fee payer public key. Required when feePayer is true. */
+        feePayerKey?: string;
+        /** Grace period in seconds for forced close. */
+        gracePeriodSeconds?: number;
+        /** Maximum clock skew tolerance in seconds for voucher expiry checks. */
+        maxClockSkewSeconds?: number;
+        /** Minimum voucher delta the server will accept. */
+        minVoucherDelta?: string;
+        /** Solana network. Defaults to mainnet-beta. */
         network?: 'devnet' | 'localnet' | 'mainnet-beta' | 'surfnet' | (string & {});
-        pricing?: {
-            amountPerUnit: string;
-            meter: string;
-            minDebit?: string;
-            unit: string;
-        };
+        /** Base58-encoded recipient (payee) public key. */
         recipient: string;
+        /** RPC URL override. */
         rpcUrl?: string;
-        sessionDefaults?: {
-            closeBehavior?: 'payer_must_close' | 'server_may_finalize';
-            settleInterval?: { kind: string; minIncrement?: string; seconds?: number };
-            suggestedDeposit?: string;
-            ttlSeconds?: number;
-        };
+        /** Persistence store. Defaults to in-memory. */
         store?: Store.Store;
-        transactionVerifier?: TransactionVerifier;
-        verifier?: {
-            acceptAuthorizationModes?: Array<'regular_budget' | 'regular_unbounded' | 'swig_session'>;
-            maxClockSkewSeconds?: number;
-            voucherVerifier?: VoucherVerifier;
-        };
+        /** Suggested initial channel deposit. */
+        suggestedDeposit?: string;
+        /** Handlers for inspecting and broadcasting partially-signed transactions. */
+        transactionHandler?: TransactionHandler;
+        /** Suggested TTL for the session in seconds. */
+        ttlSeconds?: number;
+        /** Unit type for pricing (e.g., "request", "token", "byte"). */
+        unitType?: string;
+        /** Custom voucher verifier for non-standard signature types. */
+        voucherVerifier?: VoucherVerifier;
     };
 }

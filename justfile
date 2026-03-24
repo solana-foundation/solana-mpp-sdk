@@ -51,16 +51,26 @@ rs-fmt:
 rs-lint:
     cd rust && cargo clippy -- -D warnings
 
+# ── Anchor ──
+
+# Build Anchor program (programs/mpp-channel)
+anchor-build:
+    anchor build --no-idl
+
+# Run Anchor localnet tests (starts solana-test-validator automatically)
+anchor-test:
+    anchor test
+
 # ── Orchestration ──
 
 # Build everything
-build: ts-build rs-build
+build: ts-build rs-build anchor-build
 
 # Run all unit tests
 test: ts-test rs-test
 
 # Run all tests including integration
-test-all: ts-test ts-test-integration rs-test
+test-all: ts-test ts-test-integration rs-test anchor-test
 
 # Format everything
 fmt: ts-fmt rs-fmt

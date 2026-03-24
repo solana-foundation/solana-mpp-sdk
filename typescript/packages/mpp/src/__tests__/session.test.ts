@@ -4,69 +4,52 @@ import { Store } from 'mppx/server';
 import { session } from '../server/Session.js';
 import { signVoucher } from '../session/Voucher.js';
 import * as ChannelStore from '../session/ChannelStore.js';
-import type { AuthorizationMode, ChannelState, SignedSessionVoucher } from '../session/Types.js';
+import type { ChannelState, SignedSessionVoucher } from '../session/Types.js';
 
 const RECIPIENT = '9xAXssX9j7vuK99c7cFwqbixzL3bFrzPy9PUhCtDPAYJ';
 const CHANNEL_PROGRAM = 'swigypWHEksbC64pWKwah1WTeh9JXwx8H1rJHLdbQMB';
-const NETWORK = 'devnet';
+const TOKEN_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC mint (mock SPL address for tests)
 
 type ChallengeRequest = {
+    amount: string;
+    currency: string;
     recipient: string;
-    network?: string;
-    asset: { kind: 'sol' | 'spl'; mint?: string; decimals: number; symbol?: string };
-    channelProgram: string;
-    pricing?: { unit: string; amountPerUnit: string; meter: string; minDebit?: string };
-    sessionDefaults?: {
-        suggestedDeposit?: string;
-        ttlSeconds?: number;
-        settleInterval?: { kind: string; minIncrement?: string; seconds?: number };
-        closeBehavior?: 'server_may_finalize' | 'payer_must_close';
+    methodDetails: {
+        channelProgram: string;
+        network?: string;
+        decimals?: number;
     };
-    verifier?: {
-        acceptAuthorizationModes?: Array<'swig_session' | 'regular_budget' | 'regular_unbounded'>;
-        maxClockSkewSeconds?: number;
-    };
+    suggestedDeposit?: string;
+    unitType?: string;
 };
 
 type OpenCredentialOptions = {
     channelId: string;
-    serverNonce?: string;
     depositAmount?: string;
     cumulativeAmount?: string;
-    sequence?: number;
-    authorizationMode?: AuthorizationMode;
     challengeId?: string;
-    challengeRequestOverrides?: Partial<ChallengeRequest>;
     voucher?: SignedSessionVoucher;
 };
 
-type UpdateCredentialOptions = {
+type VoucherCredentialOptions = {
     channelId: string;
-    serverNonce: string;
     cumulativeAmount: string;
-    sequence: number;
     challengeId?: string;
-    challengeRequestOverrides?: Partial<ChallengeRequest>;
     voucher?: SignedSessionVoucher;
 };
 
 type CloseCredentialOptions = {
     channelId: string;
-    serverNonce: string;
-    cumulativeAmount: string;
-    sequence: number;
-    closeTx?: string;
+    cumulativeAmount?: string;
     challengeId?: string;
-    challengeRequestOverrides?: Partial<ChallengeRequest>;
     voucher?: SignedSessionVoucher;
 };
 
-type TopupCredentialOptions = {
+type TopUpCredentialOptions = {
     channelId: string;
     additionalAmount: string;
-    topupTx: string;
+    transaction: string;
     challengeId?: string;
-    challengeRequestOverrides?: Partial<ChallengeRequest>;
 };
 
 let store: Store.Store;
@@ -81,95 +64,45 @@ afterEach(() => {
     store = Store.memory();
 });
 
-test('session() throws when asset is spl without mint', () => {
+test('session() throws when currency is empty', () => {
     expect(() =>
         session({
             recipient: RECIPIENT,
-            network: NETWORK,
-            asset: { kind: 'spl', decimals: 6 },
+            currency: '',
+            amount: '10',
             channelProgram: CHANNEL_PROGRAM,
             store,
         }),
-    ).toThrow(/asset\.mint is required/);
+    ).toThrow(/currency is required/);
 });
 
-test('request() populates recipient/network/asset/channel metadata', async () => {
+test('request() populates recipient/currency/amount/channelProgram metadata', async () => {
     const method = session({
         recipient: RECIPIENT,
-        network: NETWORK,
-        asset: { kind: 'sol', decimals: 9, symbol: 'sol' },
+        currency: TOKEN_MINT,
+        amount: '10',
         channelProgram: CHANNEL_PROGRAM,
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-            minDebit: '5',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '1000',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['regular_unbounded'],
-            maxClockSkewSeconds: 10,
-        },
+        suggestedDeposit: '1000',
+        unitType: 'request',
         store,
     });
 
     const request = await method.request!({
         credential: null,
         request: {
+            amount: '',
+            currency: '',
             recipient: '',
-            network: undefined,
-            asset: { kind: 'sol', decimals: 9 },
-            channelProgram: '',
+            methodDetails: { channelProgram: '' },
         },
     });
 
     expect(request.recipient).toBe(RECIPIENT);
-    expect(request.network).toBe(NETWORK);
-    expect(request.asset).toEqual({ kind: 'sol', decimals: 9, symbol: 'sol' });
-    expect(request.channelProgram).toBe(CHANNEL_PROGRAM);
-    expect(request.pricing).toEqual({
-        unit: 'request',
-        amountPerUnit: '10',
-        meter: 'api_calls',
-        minDebit: '5',
-    });
-    expect(request.sessionDefaults).toEqual({
-        suggestedDeposit: '1000',
-        ttlSeconds: 60,
-    });
-    expect(request.verifier).toEqual({
-        acceptAuthorizationModes: ['regular_unbounded'],
-        maxClockSkewSeconds: 10,
-    });
-});
-
-test('request() returns challenge request when credential is present', async () => {
-    const method = session({
-        recipient: RECIPIENT,
-        network: NETWORK,
-        asset: { kind: 'sol', decimals: 9 },
-        channelProgram: CHANNEL_PROGRAM,
-        store,
-    });
-
-    const challengeRequest = buildChallengeRequest({
-        pricing: { unit: 'request', amountPerUnit: '1', meter: 'api' },
-    });
-
-    const request = await method.request!({
-        credential: buildCredentialWithChallengeRequest(challengeRequest),
-        request: {
-            recipient: '',
-            network: undefined,
-            asset: { kind: 'sol', decimals: 9 },
-            channelProgram: '',
-        },
-    });
-
-    expect(request).toEqual(challengeRequest);
+    expect(request.currency).toBe(TOKEN_MINT);
+    expect(request.amount).toBe('10');
+    expect(request.methodDetails.channelProgram).toBe(CHANNEL_PROGRAM);
+    expect(request.suggestedDeposit).toBe('1000');
+    expect(request.unitType).toBe('request');
 });
 
 test('open flow creates channel state and returns success receipt', async () => {
@@ -179,7 +112,6 @@ test('open flow creates channel state and returns success receipt', async () => 
         channelId,
         depositAmount: '1000',
         cumulativeAmount: '0',
-        sequence: 0,
         challengeId: 'challenge-open',
     });
 
@@ -195,9 +127,8 @@ test('open flow creates channel state and returns success receipt', async () => 
     expect(channel).toBeTruthy();
     expect(channel!.status).toBe('open');
     expect(channel!.escrowedAmount).toBe('1000');
-    expect(channel!.lastAuthorizedAmount).toBe('0');
-    expect(channel!.lastSequence).toBe(0);
-    expect(channel!.recipient).toBe(RECIPIENT);
+    expect(channel!.acceptedCumulative).toBe('0');
+    expect(channel!.payee).toBe(RECIPIENT);
 
     const response = await method.respond!({
         credential,
@@ -208,105 +139,118 @@ test('open flow creates channel state and returns success receipt', async () => 
     expect(response).toBeUndefined();
 });
 
-test('update flow enforces monotonic cumulative amount and sequence', async () => {
-    const channelId = `channel-update-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
+test('voucher flow enforces cumulative monotonicity', async () => {
+    const channelId = `channel-voucher-${crypto.randomUUID()}`;
     const method = createMethod();
 
     await method.verify({
         credential: await buildOpenCredential({
             channelId,
-            serverNonce,
             depositAmount: '1000',
             cumulativeAmount: '0',
-            sequence: 0,
         }),
         request: buildChallengeRequest(),
     });
 
-    const firstUpdate = await method.verify({
-        credential: await buildUpdateCredential({
+    const firstVoucher = await method.verify({
+        credential: await buildVoucherCredential({
             channelId,
-            serverNonce,
             cumulativeAmount: '300',
-            sequence: 1,
-            challengeId: 'challenge-update-1',
+            challengeId: 'challenge-voucher-1',
         }),
         request: buildChallengeRequest(),
     });
 
-    expect(firstUpdate.status).toBe('success');
-    expect(firstUpdate.reference).toBe(channelId);
+    expect(firstVoucher.status).toBe('success');
 
     const channelAfterFirst = await getChannel(channelId);
-    expect(channelAfterFirst).toBeTruthy();
-    expect(channelAfterFirst!.lastAuthorizedAmount).toBe('300');
-    expect(channelAfterFirst!.lastSequence).toBe(1);
-
-    const replayCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '350',
-        sequence: 1,
-    });
-
-    await expect(
-        method.verify({
-            credential: replayCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/replay detected/);
-
-    const nonMonotonicCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '250',
-        sequence: 2,
-    });
-
-    await expect(
-        method.verify({
-            credential: nonMonotonicCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/monotonically non-decreasing/);
+    expect(channelAfterFirst!.acceptedCumulative).toBe('300');
 });
 
-test('topup flow updates escrowed deposit and respond() returns 204', async () => {
+test('voucher is idempotent for same cumulative amount and rejects lower', async () => {
+    const channelId = `channel-idempotent-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    await method.verify({
+        credential: await buildVoucherCredential({ channelId, cumulativeAmount: '300' }),
+        request: buildChallengeRequest(),
+    });
+
+    // Same amount: idempotent success, no state change.
+    const idempotentResult = await method.verify({
+        credential: await buildVoucherCredential({ channelId, cumulativeAmount: '300' }),
+        request: buildChallengeRequest(),
+    });
+    expect(idempotentResult.status).toBe('success');
+    const channelAfter = await getChannel(channelId);
+    expect(channelAfter!.acceptedCumulative).toBe('300');
+
+    // Lower amount: rejected — cumulative must not decrease.
+    await expect(
+        method.verify({
+            credential: await buildVoucherCredential({ channelId, cumulativeAmount: '200' }),
+            request: buildChallengeRequest(),
+        }),
+    ).rejects.toThrow(/cumulative amount must not decrease/);
+});
+
+test('rejects voucher on channel with pending forced close', async () => {
+    const channelId = `channel-pending-close-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    // Simulate a pending forced close.
+    const channelStore = ChannelStore.fromStore(store);
+    await channelStore.updateChannel(channelId, current => {
+        if (!current) return null;
+        return { ...current, closeRequestedAt: Math.floor(Date.now() / 1000) };
+    });
+
+    await expect(
+        method.verify({
+            credential: await buildVoucherCredential({ channelId, cumulativeAmount: '100' }),
+            request: buildChallengeRequest(),
+        }),
+    ).rejects.toThrow(/pending forced close/);
+});
+
+test('topUp flow updates escrowed deposit and respond() returns 204', async () => {
     const channelId = `channel-topup-${crypto.randomUUID()}`;
     const method = createMethod();
 
     await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            depositAmount: '1000',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
         request: buildChallengeRequest(),
     });
 
-    const topupCredential = buildTopupCredential({
+    const topUpCredential = buildTopUpCredential({
         channelId,
         additionalAmount: '250',
-        topupTx: 'topup-transaction',
+        transaction: 'dHJhbnNhY3Rpb24tYnl0ZXM=',
         challengeId: 'challenge-topup',
     });
 
     const receipt = await method.verify({
-        credential: topupCredential,
+        credential: topUpCredential,
         request: buildChallengeRequest(),
     });
 
     expect(receipt.status).toBe('success');
-    expect(receipt.reference).toBe(channelId);
 
     const channel = await getChannel(channelId);
-    expect(channel).toBeTruthy();
     expect(channel!.escrowedAmount).toBe('1250');
 
     const response = await method.respond!({
-        credential: topupCredential,
+        credential: topUpCredential,
         request: buildChallengeRequest(),
         receipt,
         input: new Request('http://localhost'),
@@ -314,37 +258,52 @@ test('topup flow updates escrowed deposit and respond() returns 204', async () =
     expect(response?.status).toBe(204);
 });
 
-test('close flow marks channel as closed and respond() returns 204', async () => {
-    const channelId = `channel-close-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
+test('topUp resets closeRequestedAt', async () => {
+    const channelId = `channel-topup-reset-${crypto.randomUUID()}`;
     const method = createMethod();
 
     await method.verify({
-        credential: await buildOpenCredential({
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    // Simulate a pending close by manually setting closeRequestedAt.
+    const channelStore = ChannelStore.fromStore(store);
+    await channelStore.updateChannel(channelId, current => {
+        if (!current) return null;
+        return { ...current, closeRequestedAt: Math.floor(Date.now() / 1000) };
+    });
+
+    await method.verify({
+        credential: buildTopUpCredential({
             channelId,
-            serverNonce,
-            depositAmount: '1000',
-            cumulativeAmount: '0',
-            sequence: 0,
+            additionalAmount: '500',
+            transaction: 'dHJhbnNhY3Rpb24tYnl0ZXM=',
         }),
         request: buildChallengeRequest(),
     });
 
+    const channel = await getChannel(channelId);
+    expect(channel!.closeRequestedAt).toBe(0);
+});
+
+test('close flow marks channel as closed and respond() returns 204', async () => {
+    const channelId = `channel-close-${crypto.randomUUID()}`;
+    const method = createMethod();
+
     await method.verify({
-        credential: await buildUpdateCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '400',
-            sequence: 1,
-        }),
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    await method.verify({
+        credential: await buildVoucherCredential({ channelId, cumulativeAmount: '400' }),
         request: buildChallengeRequest(),
     });
 
     const closeCredential = await buildCloseCredential({
         channelId,
-        serverNonce,
         cumulativeAmount: '450',
-        sequence: 2,
         challengeId: 'challenge-close',
     });
 
@@ -354,13 +313,10 @@ test('close flow marks channel as closed and respond() returns 204', async () =>
     });
 
     expect(receipt.status).toBe('success');
-    expect(receipt.reference).toBe(channelId);
 
     const channel = await getChannel(channelId);
-    expect(channel).toBeTruthy();
     expect(channel!.status).toBe('closed');
-    expect(channel!.lastAuthorizedAmount).toBe('450');
-    expect(channel!.lastSequence).toBe(2);
+    expect(channel!.acceptedCumulative).toBe('450');
 
     const response = await method.respond!({
         credential: closeCredential,
@@ -371,15 +327,37 @@ test('close flow marks channel as closed and respond() returns 204', async () =>
     expect(response?.status).toBe(204);
 });
 
+test('close without voucher marks channel closed', async () => {
+    const channelId = `channel-close-no-voucher-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    const closeCredential = {
+        payload: { action: 'close' as const, channelId },
+        challenge: { id: 'challenge-close', request: buildChallengeRequest() },
+    } as any;
+
+    const receipt = await method.verify({
+        credential: closeCredential,
+        request: buildChallengeRequest(),
+    });
+
+    expect(receipt.status).toBe('success');
+    const channel = await getChannel(channelId);
+    expect(channel!.status).toBe('closed');
+});
+
 test('rejects invalid voucher signature', async () => {
-    const channelId = `channel-invalid-signature-${crypto.randomUUID()}`;
+    const channelId = `channel-invalid-sig-${crypto.randomUUID()}`;
     const method = createMethod();
 
     const validVoucher = await buildSignedVoucher({
         channelId,
         cumulativeAmount: '0',
-        sequence: 0,
-        serverNonce: crypto.randomUUID(),
     });
 
     const invalidVoucher: SignedSessionVoucher = {
@@ -387,39 +365,114 @@ test('rejects invalid voucher signature', async () => {
         signature: `${validVoucher.signature}-tampered`,
     };
 
-    const invalidOpenCredential = await buildOpenCredential({
+    const credential = await buildOpenCredential({
         channelId,
         depositAmount: '1000',
         voucher: invalidVoucher,
     });
 
+    await expect(method.verify({ credential, request: buildChallengeRequest() })).rejects.toThrow(
+        /Invalid voucher signature/,
+    );
+});
+
+test('rejects voucher signed by unauthorized signer', async () => {
+    const channelId = `channel-rogue-signer-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '1000', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    const rogueSigner = await generateKeyPairSigner();
+    const rogueVoucher = await signVoucher(rogueSigner, {
+        channelId,
+        cumulativeAmount: '200',
+    });
+
     await expect(
         method.verify({
-            credential: invalidOpenCredential,
+            credential: await buildVoucherCredential({
+                channelId,
+                cumulativeAmount: '200',
+                voucher: rogueVoucher,
+            }),
             request: buildChallengeRequest(),
         }),
-    ).rejects.toThrow(/Invalid voucher signature/);
+    ).rejects.toThrow(/does not match authorized signer/);
+});
+
+test('rejects update when cumulative amount exceeds deposit', async () => {
+    const channelId = `channel-exceed-deposit-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '100', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    await expect(
+        method.verify({
+            credential: await buildVoucherCredential({ channelId, cumulativeAmount: '101' }),
+            request: buildChallengeRequest(),
+        }),
+    ).rejects.toThrow(/exceeds channel deposit/);
+});
+
+test('rejects actions after channel is closed', async () => {
+    const channelId = `channel-closed-${crypto.randomUUID()}`;
+    const method = createMethod();
+
+    await method.verify({
+        credential: await buildOpenCredential({ channelId, depositAmount: '500', cumulativeAmount: '0' }),
+        request: buildChallengeRequest(),
+    });
+
+    await method.verify({
+        credential: await buildCloseCredential({ channelId, cumulativeAmount: '100' }),
+        request: buildChallengeRequest(),
+    });
+
+    await expect(
+        method.verify({
+            credential: await buildVoucherCredential({ channelId, cumulativeAmount: '150' }),
+            request: buildChallengeRequest(),
+        }),
+    ).rejects.toThrow(/closed/);
+});
+
+test('request() returns challenge request when credential is present', async () => {
+    const method = createMethod();
+
+    const challengeRequest = buildChallengeRequest();
+
+    const request = await method.request!({
+        credential: { challenge: { request: challengeRequest } } as any,
+        request: {
+            amount: '',
+            currency: '',
+            recipient: '',
+            methodDetails: { channelProgram: '' },
+        },
+    });
+
+    expect(request).toEqual(challengeRequest);
 });
 
 test('accepts swig-session vouchers signed by delegated session key', async () => {
     const channelId = `channel-swig-valid-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
     const method = createMethod();
     const delegatedSessionSigner = await generateKeyPairSigner();
 
     await method.verify({
         credential: await buildOpenCredential({
             channelId,
-            serverNonce,
             depositAmount: '1000',
             cumulativeAmount: '0',
-            sequence: 0,
-            authorizationMode: 'swig_session',
             voucher: await buildSignedVoucher({
                 channelId,
-                serverNonce,
                 cumulativeAmount: '0',
-                sequence: 0,
                 signer: delegatedSessionSigner,
                 signatureType: 'swig-session',
             }),
@@ -428,16 +481,12 @@ test('accepts swig-session vouchers signed by delegated session key', async () =
     });
 
     const receipt = await method.verify({
-        credential: await buildUpdateCredential({
+        credential: await buildVoucherCredential({
             channelId,
-            serverNonce,
             cumulativeAmount: '250',
-            sequence: 1,
             voucher: await buildSignedVoucher({
                 channelId,
-                serverNonce,
                 cumulativeAmount: '250',
-                sequence: 1,
                 signer: delegatedSessionSigner,
                 signatureType: 'swig-session',
             }),
@@ -446,12 +495,10 @@ test('accepts swig-session vouchers signed by delegated session key', async () =
     });
 
     expect(receipt.status).toBe('success');
-    expect(receipt.reference).toBe(channelId);
 });
 
 test('rejects swig-session voucher signed by wrong signer', async () => {
     const channelId = `channel-swig-wrong-signer-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
     const method = createMethod();
     const delegatedSessionSigner = await generateKeyPairSigner();
     const wrongSigner = await generateKeyPairSigner();
@@ -459,16 +506,11 @@ test('rejects swig-session voucher signed by wrong signer', async () => {
     await method.verify({
         credential: await buildOpenCredential({
             channelId,
-            serverNonce,
             depositAmount: '1000',
             cumulativeAmount: '0',
-            sequence: 0,
-            authorizationMode: 'swig_session',
             voucher: await buildSignedVoucher({
                 channelId,
-                serverNonce,
                 cumulativeAmount: '0',
-                sequence: 0,
                 signer: delegatedSessionSigner,
                 signatureType: 'swig-session',
             }),
@@ -476,315 +518,86 @@ test('rejects swig-session voucher signed by wrong signer', async () => {
         request: buildChallengeRequest(),
     });
 
-    const wrongSignerCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '250',
-        sequence: 1,
-        voucher: await buildSignedVoucher({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '250',
-            sequence: 1,
-            signer: wrongSigner,
-            signatureType: 'swig-session',
-        }),
-    });
-
     await expect(
         method.verify({
-            credential: wrongSignerCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/delegated session key/);
-});
-
-test('open flow supports configurable transactionVerifier callbacks', async () => {
-    const channelId = `channel-open-verified-${crypto.randomUUID()}`;
-    const method = createMethod({
-        transactionVerifier: {
-            verifyOpen: async () => {
-                throw new Error('open transaction rejected by verifier');
-            },
-        },
-    });
-
-    const credential = await buildOpenCredential({
-        channelId,
-        depositAmount: '1000',
-        cumulativeAmount: '0',
-        sequence: 0,
-    });
-
-    await expect(
-        method.verify({
-            credential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/open transaction rejected by verifier/);
-});
-
-test('close flow supports configurable transactionVerifier callbacks', async () => {
-    const channelId = `channel-close-verified-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-
-    let observedCloseTx: string | null = null;
-    let observedFinalCumulative: string | null = null;
-
-    const method = createMethod({
-        transactionVerifier: {
-            verifyClose: async (_channelId, closeTx, finalCumulativeAmount) => {
-                observedCloseTx = closeTx;
-                observedFinalCumulative = finalCumulativeAmount;
-            },
-        },
-    });
-
-    await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            serverNonce,
-            depositAmount: '1000',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    await method.verify({
-        credential: await buildUpdateCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '400',
-            sequence: 1,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    const receipt = await method.verify({
-        credential: await buildCloseCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '450',
-            sequence: 2,
-            closeTx: 'close-transaction-signature',
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    expect(receipt.reference).toBe('close-transaction-signature');
-    expect(observedCloseTx).toBe('close-transaction-signature');
-    expect(observedFinalCumulative).toBe('450');
-});
-
-test('close flow requires closeTx when verifyClose callback is configured', async () => {
-    const channelId = `channel-close-missing-tx-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-
-    const method = createMethod({
-        transactionVerifier: {
-            verifyClose: async () => undefined,
-        },
-    });
-
-    await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            serverNonce,
-            depositAmount: '1000',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    await method.verify({
-        credential: await buildUpdateCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '400',
-            sequence: 1,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    await expect(
-        method.verify({
-            credential: await buildCloseCredential({
+            credential: await buildVoucherCredential({
                 channelId,
-                serverNonce,
-                cumulativeAmount: '450',
-                sequence: 2,
+                cumulativeAmount: '250',
+                voucher: await buildSignedVoucher({
+                    channelId,
+                    cumulativeAmount: '250',
+                    signer: wrongSigner,
+                    signatureType: 'swig-session',
+                }),
             }),
             request: buildChallengeRequest(),
         }),
-    ).rejects.toThrow(/closeTx is required/);
+    ).rejects.toThrow(/does not match authorized signer/);
 });
 
-test('rejects update when cumulative amount exceeds deposit', async () => {
-    const channelId = `channel-exceed-deposit-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-    const method = createMethod();
+test('open flow calls transactionHandler.handleOpen with correct args', async () => {
+    const channelId = `channel-handler-open-${crypto.randomUUID()}`;
+    let handledChannelId: string | null = null;
+    let handledTransaction: string | null = null;
+    let handledDeposit: string | null = null;
 
-    await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            serverNonce,
-            depositAmount: '100',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
-        request: buildChallengeRequest(),
+    const method = createMethod({
+        transactionHandler: {
+            async handleOpen(cid, tx, deposit) {
+                handledChannelId = cid;
+                handledTransaction = tx;
+                handledDeposit = deposit;
+                return 'mock-open-signature';
+            },
+        },
     });
 
-    const exceedsDepositCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '101',
-        sequence: 1,
-    });
-
-    await expect(
-        method.verify({
-            credential: exceedsDepositCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/exceeds channel deposit/);
-});
-
-test('rejects replay attempts using duplicate sequence', async () => {
-    const channelId = `channel-replay-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-    const method = createMethod();
-
-    await method.verify({
+    const receipt = await method.verify({
         credential: await buildOpenCredential({
             channelId,
-            serverNonce,
             depositAmount: '1000',
             cumulativeAmount: '0',
-            sequence: 0,
         }),
         request: buildChallengeRequest(),
     });
 
-    await method.verify({
-        credential: await buildUpdateCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '200',
-            sequence: 1,
-        }),
-        request: buildChallengeRequest(),
-    });
+    expect(receipt.status).toBe('success');
+    expect(receipt.reference).toBe('mock-open-signature');
+    expect(handledChannelId).toBe(channelId);
+    expect(handledTransaction).toBe('dHJhbnNhY3Rpb24tYnl0ZXM=');
+    expect(handledDeposit).toBe('1000');
+});
 
-    const replayUpdateCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '250',
-        sequence: 1,
+test('open flow rejects when transactionHandler.handleOpen throws', async () => {
+    const channelId = `channel-handler-reject-${crypto.randomUUID()}`;
+
+    const method = createMethod({
+        transactionHandler: {
+            async handleOpen() {
+                throw new Error('open transaction rejected by handler');
+            },
+        },
     });
 
     await expect(
         method.verify({
-            credential: replayUpdateCredential,
+            credential: await buildOpenCredential({
+                channelId,
+                depositAmount: '1000',
+                cumulativeAmount: '0',
+            }),
             request: buildChallengeRequest(),
         }),
-    ).rejects.toThrow(/replay detected/);
+    ).rejects.toThrow(/open transaction rejected by handler/);
 });
 
-test('rejects voucher signed by unauthorized signer', async () => {
-    const channelId = `channel-rogue-signer-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-    const method = createMethod();
-
-    await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            serverNonce,
-            depositAmount: '1000',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    const rogueSigner = await generateKeyPairSigner();
-    const rogueVoucher = await signVoucher(rogueSigner, {
-        channelId,
-        payer: payerSigner.address,
-        recipient: RECIPIENT,
-        cumulativeAmount: '200',
-        sequence: 1,
-        meter: 'api_calls',
-        units: '1',
-        serverNonce,
-        chainId: `solana:${NETWORK}`,
-        channelProgram: CHANNEL_PROGRAM,
-    });
-
-    const rogueCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '200',
-        sequence: 1,
-        voucher: rogueVoucher,
-    });
-
-    await expect(
-        method.verify({
-            credential: rogueCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/does not match channel payer/);
-});
-
-test('rejects actions after channel is closed', async () => {
-    const channelId = `channel-closed-${crypto.randomUUID()}`;
-    const serverNonce = crypto.randomUUID();
-    const method = createMethod();
-
-    await method.verify({
-        credential: await buildOpenCredential({
-            channelId,
-            serverNonce,
-            depositAmount: '500',
-            cumulativeAmount: '0',
-            sequence: 0,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    await method.verify({
-        credential: await buildCloseCredential({
-            channelId,
-            serverNonce,
-            cumulativeAmount: '100',
-            sequence: 1,
-        }),
-        request: buildChallengeRequest(),
-    });
-
-    const updateAfterCloseCredential = await buildUpdateCredential({
-        channelId,
-        serverNonce,
-        cumulativeAmount: '150',
-        sequence: 2,
-    });
-
-    await expect(
-        method.verify({
-            credential: updateAfterCloseCredential,
-            request: buildChallengeRequest(),
-        }),
-    ).rejects.toThrow(/closed/);
-});
+// ---------- helpers ----------
 
 function createMethod(overrides: Partial<session.Parameters> = {}) {
     return session({
         recipient: RECIPIENT,
-        network: NETWORK,
-        asset: { kind: 'sol', decimals: 9 },
+        currency: TOKEN_MINT,
+        amount: '10',
         channelProgram: CHANNEL_PROGRAM,
         store,
         ...overrides,
@@ -793,23 +606,17 @@ function createMethod(overrides: Partial<session.Parameters> = {}) {
 
 function buildChallengeRequest(overrides: Partial<ChallengeRequest> = {}): ChallengeRequest {
     return {
+        amount: '10',
+        currency: TOKEN_MINT,
         recipient: RECIPIENT,
-        network: NETWORK,
-        asset: { kind: 'sol', decimals: 9 },
-        channelProgram: CHANNEL_PROGRAM,
+        methodDetails: { channelProgram: CHANNEL_PROGRAM, network: 'devnet' },
         ...overrides,
     };
 }
 
-function buildCredentialWithChallengeRequest(request: ChallengeRequest): any {
-    return { challenge: { request } };
-}
-
 async function buildSignedVoucher(input: {
     channelId: string;
-    serverNonce: string;
     cumulativeAmount: string;
-    sequence: number;
     signer?: Awaited<ReturnType<typeof generateKeyPairSigner>>;
     signatureType?: SignedSessionVoucher['signatureType'];
 }): Promise<SignedSessionVoucher> {
@@ -817,15 +624,7 @@ async function buildSignedVoucher(input: {
 
     const voucher = await signVoucher(signer, {
         channelId: input.channelId,
-        payer: payerSigner.address,
-        recipient: RECIPIENT,
         cumulativeAmount: input.cumulativeAmount,
-        sequence: input.sequence,
-        meter: 'api_calls',
-        units: '1',
-        serverNonce: input.serverNonce,
-        chainId: `solana:${NETWORK}`,
-        channelProgram: CHANNEL_PROGRAM,
     });
 
     if (input.signatureType === undefined || input.signatureType === voucher.signatureType) {
@@ -839,14 +638,11 @@ async function buildSignedVoucher(input: {
 }
 
 async function buildOpenCredential(options: OpenCredentialOptions): Promise<any> {
-    const serverNonce = options.serverNonce ?? crypto.randomUUID();
     const voucher =
         options.voucher ??
         (await buildSignedVoucher({
             channelId: options.channelId,
-            serverNonce,
             cumulativeAmount: options.cumulativeAmount ?? '0',
-            sequence: options.sequence ?? 0,
         }));
 
     return {
@@ -854,76 +650,71 @@ async function buildOpenCredential(options: OpenCredentialOptions): Promise<any>
             action: 'open',
             channelId: options.channelId,
             payer: payerSigner.address,
-            authorizationMode: options.authorizationMode ?? 'regular_unbounded',
             depositAmount: options.depositAmount ?? '1000',
-            openTx: 'open-transaction',
+            transaction: 'dHJhbnNhY3Rpb24tYnl0ZXM=',
             voucher,
         },
         challenge: {
             id: options.challengeId ?? 'challenge-open',
-            request: buildChallengeRequest(options.challengeRequestOverrides),
+            request: buildChallengeRequest(),
         },
     };
 }
 
-async function buildUpdateCredential(options: UpdateCredentialOptions): Promise<any> {
+async function buildVoucherCredential(options: VoucherCredentialOptions): Promise<any> {
     const voucher =
         options.voucher ??
         (await buildSignedVoucher({
             channelId: options.channelId,
-            serverNonce: options.serverNonce,
             cumulativeAmount: options.cumulativeAmount,
-            sequence: options.sequence,
         }));
 
     return {
         payload: {
-            action: 'update',
+            action: 'voucher',
             channelId: options.channelId,
             voucher,
         },
         challenge: {
-            id: options.challengeId ?? 'challenge-update',
-            request: buildChallengeRequest(options.challengeRequestOverrides),
+            id: options.challengeId ?? 'challenge-voucher',
+            request: buildChallengeRequest(),
         },
     };
 }
 
 async function buildCloseCredential(options: CloseCredentialOptions): Promise<any> {
-    const voucher =
-        options.voucher ??
-        (await buildSignedVoucher({
-            channelId: options.channelId,
-            serverNonce: options.serverNonce,
-            cumulativeAmount: options.cumulativeAmount,
-            sequence: options.sequence,
-        }));
+    const voucher = options.cumulativeAmount
+        ? (options.voucher ??
+          (await buildSignedVoucher({
+              channelId: options.channelId,
+              cumulativeAmount: options.cumulativeAmount,
+          })))
+        : options.voucher;
 
     return {
         payload: {
             action: 'close',
             channelId: options.channelId,
-            ...(options.closeTx ? { closeTx: options.closeTx } : {}),
-            voucher,
+            ...(voucher ? { voucher } : {}),
         },
         challenge: {
             id: options.challengeId ?? 'challenge-close',
-            request: buildChallengeRequest(options.challengeRequestOverrides),
+            request: buildChallengeRequest(),
         },
     };
 }
 
-function buildTopupCredential(options: TopupCredentialOptions): any {
+function buildTopUpCredential(options: TopUpCredentialOptions): any {
     return {
         payload: {
-            action: 'topup',
+            action: 'topUp',
             channelId: options.channelId,
             additionalAmount: options.additionalAmount,
-            topupTx: options.topupTx,
+            transaction: options.transaction,
         },
         challenge: {
             id: options.challengeId ?? 'challenge-topup',
-            request: buildChallengeRequest(options.challengeRequestOverrides),
+            request: buildChallengeRequest(),
         },
     };
 }

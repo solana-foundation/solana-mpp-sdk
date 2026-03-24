@@ -1,20 +1,17 @@
 import type { MessagePartialSigner } from '@solana/kit';
 
 import type { SessionAuthorizer, SessionPolicyProfile } from '../Types.js';
-import { BudgetAuthorizer, type BudgetAuthorizerParameters } from './BudgetAuthorizer.js';
+import { SwigBudgetAuthorizer, type SwigBudgetAuthorizerParameters } from './SwigBudgetAuthorizer.js';
 import { SwigSessionAuthorizer, type SwigWalletAdapter } from './SwigSessionAuthorizer.js';
 import { UnboundedAuthorizer, type UnboundedAuthorizerParameters } from './UnboundedAuthorizer.js';
 
 export interface MakeSessionAuthorizerParameters {
     allowedPrograms?: string[];
-    buildCloseTx?: (
-        input: Parameters<NonNullable<BudgetAuthorizerParameters['buildCloseTx']>>[0],
-    ) => Promise<string> | string;
     buildOpenTx?: (
-        input: Parameters<NonNullable<BudgetAuthorizerParameters['buildOpenTx']>>[0],
+        input: Parameters<NonNullable<SwigBudgetAuthorizerParameters['buildOpenTx']>>[0],
     ) => Promise<string> | string;
-    buildTopupTx?: (
-        input: Parameters<NonNullable<BudgetAuthorizerParameters['buildTopupTx']>>[0],
+    buildTopUpTx?: (
+        input: Parameters<NonNullable<SwigBudgetAuthorizerParameters['buildTopUpTx']>>[0],
     ) => Promise<string> | string;
     profile: SessionPolicyProfile;
     rpcUrl?: string;
@@ -41,7 +38,7 @@ export function makeSessionAuthorizer(parameters: MakeSessionAuthorizerParameter
                 throw new Error('makeSessionAuthorizer requires `swigWallet.swigRoleId` for profile "wallet-budget"');
             }
 
-            return new BudgetAuthorizer({
+            return new SwigBudgetAuthorizer({
                 maxCumulativeAmount: profile.maxCumulativeAmount,
                 signer,
                 ...(profile.maxDepositAmount ? { maxDepositAmount: profile.maxDepositAmount } : {}),
@@ -54,8 +51,7 @@ export function makeSessionAuthorizer(parameters: MakeSessionAuthorizerParameter
                     ...(parameters.rpcUrl ? { rpcUrl: parameters.rpcUrl } : {}),
                 },
                 ...(parameters.buildOpenTx ? { buildOpenTx: parameters.buildOpenTx } : {}),
-                ...(parameters.buildTopupTx ? { buildTopupTx: parameters.buildTopupTx } : {}),
-                ...(parameters.buildCloseTx ? { buildCloseTx: parameters.buildCloseTx } : {}),
+                ...(parameters.buildTopUpTx ? { buildTopUpTx: parameters.buildTopUpTx } : {}),
             });
         }
 
@@ -65,10 +61,9 @@ export function makeSessionAuthorizer(parameters: MakeSessionAuthorizerParameter
                 signer,
                 ...(parameters.allowedPrograms ? { allowedPrograms: parameters.allowedPrograms } : {}),
                 ...(parameters.buildOpenTx ? { buildOpenTx: parameters.buildOpenTx } : {}),
-                ...(parameters.buildTopupTx ? { buildTopupTx: parameters.buildTopupTx } : {}),
-                ...(parameters.buildCloseTx ? { buildCloseTx: parameters.buildCloseTx } : {}),
+                ...(parameters.buildTopUpTx ? { buildTopUpTx: parameters.buildTopUpTx } : {}),
                 requiresInteractiveApproval: {
-                    update: profile.requireApprovalOnEveryUpdate,
+                    voucher: profile.requireApprovalOnEveryVoucher,
                 },
             };
 
@@ -86,8 +81,7 @@ export function makeSessionAuthorizer(parameters: MakeSessionAuthorizerParameter
                 ...(parameters.rpcUrl ? { rpcUrl: parameters.rpcUrl } : {}),
                 ...(parameters.allowedPrograms ? { allowedPrograms: parameters.allowedPrograms } : {}),
                 ...(parameters.buildOpenTx ? { buildOpenTx: parameters.buildOpenTx } : {}),
-                ...(parameters.buildTopupTx ? { buildTopupTx: parameters.buildTopupTx } : {}),
-                ...(parameters.buildCloseTx ? { buildCloseTx: parameters.buildCloseTx } : {}),
+                ...(parameters.buildTopUpTx ? { buildTopUpTx: parameters.buildTopUpTx } : {}),
             });
         }
     }

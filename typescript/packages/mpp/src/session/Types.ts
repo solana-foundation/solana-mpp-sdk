@@ -1,17 +1,9 @@
 export type AuthorizationMode = 'regular_budget' | 'regular_unbounded' | 'swig_session';
 
 export interface SessionVoucher {
-    chainId: string;
     channelId: string;
-    channelProgram: string;
     cumulativeAmount: string;
     expiresAt?: string;
-    meter: string;
-    payer: string;
-    recipient: string;
-    sequence: number;
-    serverNonce: string;
-    units: string;
 }
 
 export interface SignedSessionVoucher {
@@ -22,56 +14,59 @@ export interface SignedSessionVoucher {
 }
 
 export interface ChannelState {
-    asset: { decimals: number; kind: 'sol' | 'spl'; mint?: string };
-    authority: {
-        delegatedSessionKey?: string;
-        swigRoleId?: number;
-        wallet: string;
-    };
-    authorizationMode: AuthorizationMode;
+    /** Highest voucher cumulativeAmount the server has accepted. */
+    acceptedCumulative: string;
+    /** Voucher signer policy from the open credential. */
+    authorizationPolicy?: Record<string, unknown>;
+    /** Authorized signer for vouchers (payer or delegated key). */
+    authorizedSigner: string;
     channelId: string;
+    /** Unix timestamp when forced close was requested, or 0 if none. */
+    closeRequestedAt: number;
     createdAt: string;
+    /** Currency identifier: "sol" or SPL mint address. */
+    currency: string;
+    /** Token decimals for amount normalization. */
+    decimals: number;
+    /** Total amount deposited into the channel. */
     escrowedAmount: string;
-    expiresAtUnix: number | null;
-    lastAuthorizedAmount: string;
-    lastSequence: number;
-    openSlot: number;
+    /** Whether the channel has been finalized (closed). */
+    finalized: boolean;
+    /** Payee (recipient) wallet. */
+    payee: string;
     payer: string;
-    recipient: string;
-    serverNonce: string;
-    settledAmount: string;
-    status: 'closed' | 'closing' | 'expired' | 'open';
+    /** Highest cumulativeAmount already claimed via on-chain settle. */
+    settledOnChain: string;
+    /** Cumulative amount charged for delivered service. */
+    spentAmount: string;
+    status: 'closed' | 'open';
 }
 
 export type SessionCredentialPayload =
     | {
           action: 'close';
           channelId: string;
-          closeTx?: string;
-          voucher: SignedSessionVoucher;
+          voucher?: SignedSessionVoucher;
       }
     | {
           action: 'open';
-          authorizationMode: AuthorizationMode;
-          capabilities?: {
-              allowedActions?: string[];
-              maxCumulativeAmount?: string;
-          };
+          authorizationPolicy?: Record<string, unknown>;
+          capabilities?: Record<string, unknown>;
           channelId: string;
           depositAmount: string;
           expiresAt?: string;
-          openTx: string;
           payer: string;
+          transaction: string;
           voucher: SignedSessionVoucher;
       }
     | {
-          action: 'topup';
+          action: 'topUp';
           additionalAmount: string;
           channelId: string;
-          topupTx: string;
+          transaction: string;
       }
     | {
-          action: 'update';
+          action: 'voucher';
           channelId: string;
           voucher: SignedSessionVoucher;
       };
@@ -83,74 +78,60 @@ export interface VoucherVerifier {
 export interface SessionAuthorizer {
     authorizeClose(input: AuthorizeCloseInput): Promise<AuthorizedClose>;
     authorizeOpen(input: AuthorizeOpenInput): Promise<AuthorizedOpen>;
-    authorizeTopup(input: AuthorizeTopupInput): Promise<AuthorizedTopup>;
-    authorizeUpdate(input: AuthorizeUpdateInput): Promise<AuthorizedUpdate>;
+    authorizeTopUp(input: AuthorizeTopUpInput): Promise<AuthorizedTopUp>;
+    authorizeVoucher(input: AuthorizeVoucherInput): Promise<AuthorizedVoucher>;
     getCapabilities(): AuthorizerCapabilities;
     getMode(): AuthorizationMode;
 }
 
 export interface AuthorizeOpenInput {
-    asset: { decimals: number; kind: 'sol' | 'spl'; mint?: string };
     channelId: string;
     channelProgram: string;
+    currency: string;
+    decimals: number;
     depositAmount: string;
+    feePayerKey?: string;
     network: string;
-    pricing?: { amountPerUnit: string; meter: string; unit: string };
     recipient: string;
-    serverNonce: string;
 }
 
 export interface AuthorizedOpen {
-    capabilities: AuthorizerCapabilities;
-    expiresAt?: string;
-    openTx: string;
+    transaction: string;
     voucher: SignedSessionVoucher;
 }
 
-export interface AuthorizeUpdateInput {
+export interface AuthorizeVoucherInput {
     channelId: string;
-    channelProgram: string;
     cumulativeAmount: string;
-    meter: string;
-    network: string;
-    recipient: string;
-    sequence: number;
-    serverNonce: string;
-    units: string;
 }
 
-export interface AuthorizedUpdate {
+export interface AuthorizedVoucher {
     voucher: SignedSessionVoucher;
 }
 
-export interface AuthorizeTopupInput {
+export interface AuthorizeTopUpInput {
     additionalAmount: string;
     channelId: string;
     channelProgram: string;
+    feePayerKey?: string;
     network: string;
 }
 
-export interface AuthorizedTopup {
-    topupTx: string;
+export interface AuthorizedTopUp {
+    transaction: string;
 }
 
 export interface AuthorizeCloseInput {
     channelId: string;
-    channelProgram: string;
-    finalCumulativeAmount: string;
-    network: string;
-    recipient: string;
-    sequence: number;
-    serverNonce: string;
+    finalCumulativeAmount?: string;
 }
 
 export interface AuthorizedClose {
-    closeTx?: string;
-    voucher: SignedSessionVoucher;
+    voucher?: SignedSessionVoucher;
 }
 
 export interface AuthorizerCapabilities {
-    allowedActions?: Array<'close' | 'open' | 'topup' | 'update'>;
+    allowedActions?: Array<'close' | 'open' | 'topUp' | 'voucher'>;
     allowedPrograms?: string[];
     expiresAt?: string;
     maxCumulativeAmount?: string;
@@ -159,8 +140,8 @@ export interface AuthorizerCapabilities {
     requiresInteractiveApproval: {
         close: boolean;
         open: boolean;
-        topup: boolean;
-        update: boolean;
+        topUp: boolean;
+        voucher: boolean;
     };
 }
 
@@ -185,5 +166,5 @@ export type SessionPolicyProfile =
       }
     | {
           profile: 'wallet-manual';
-          requireApprovalOnEveryUpdate: boolean;
+          requireApprovalOnEveryVoucher: boolean;
       };

@@ -11,14 +11,20 @@ import {
 
 import type { SessionVoucher, SignedSessionVoucher } from './Types.js';
 
-const DOMAIN_SEPARATOR = 'solana-mpp-session-voucher-v1:';
 const textEncoder = new TextEncoder();
 const base58Encoder = getBase58Encoder();
 const base58Decoder = getBase58Decoder();
 
+/**
+ * Serialize a voucher to the bytes that get signed.
+ *
+ * Per PR #201, the signed message is the JCS-canonicalized JSON of the
+ * voucher object (no domain separator). The voucher has 3 fields:
+ * channelId, cumulativeAmount, and optionally expiresAt.
+ */
 export function serializeVoucher(voucher: SessionVoucher): Uint8Array {
     const canonical = JSON.stringify(canonicalize(voucher));
-    return textEncoder.encode(`${DOMAIN_SEPARATOR}${canonical}`);
+    return textEncoder.encode(canonical);
 }
 
 export async function signVoucher(
@@ -78,15 +84,7 @@ export function parseVoucherFromPayload(payload: unknown): SignedSessionVoucher 
         voucher: {
             channelId: readString(rawVoucher, 'channelId'),
             cumulativeAmount: readString(rawVoucher, 'cumulativeAmount'),
-            meter: readString(rawVoucher, 'meter'),
-            payer: readString(rawVoucher, 'payer'),
-            recipient: readString(rawVoucher, 'recipient'),
-            sequence: readInteger(rawVoucher, 'sequence'),
-            units: readString(rawVoucher, 'units'),
             ...(expiresAt !== undefined ? { expiresAt } : {}),
-            chainId: readString(rawVoucher, 'chainId'),
-            channelProgram: readString(rawVoucher, 'channelProgram'),
-            serverNonce: readString(rawVoucher, 'serverNonce'),
         },
     };
 }
@@ -147,12 +145,4 @@ function readOptionalString(record: Record<string, unknown>, key: string): strin
         throw new Error(`Expected optional string field: ${key}`);
     }
     return value;
-}
-
-function readInteger(record: Record<string, unknown>, key: string): number {
-    const value = record[key];
-    if (!Number.isInteger(value)) {
-        throw new Error(`Expected integer field: ${key}`);
-    }
-    return value as number;
 }

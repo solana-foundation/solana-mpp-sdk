@@ -1,0 +1,24 @@
+[package]
+name = "mpp-channel"
+version = "0.1.0"
+edition = "2021"
+description = "MPP Solana payment channel escrow program"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+anchor-lang = "1.0.0-rc.2"
+anchor-spl = "1.0.0-rc.2"
+solana-instructions-sysvar = "3"
+solana-sdk-ids = "3"
+
+[dev-dependencies]
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]

@@ -5,12 +5,12 @@ import {
     type AuthorizeCloseInput,
     type AuthorizedClose,
     type AuthorizedOpen,
-    type AuthorizedTopup,
-    type AuthorizedUpdate,
+    type AuthorizedTopUp,
+    type AuthorizedVoucher,
     type AuthorizeOpenInput,
     type AuthorizerCapabilities,
-    type AuthorizeTopupInput,
-    type AuthorizeUpdateInput,
+    type AuthorizeTopUpInput,
+    type AuthorizeVoucherInput,
     type SessionAuthorizer,
 } from '../Types.js';
 import { signVoucher } from '../Voucher.js';
@@ -56,17 +56,15 @@ type SwigOnChainRoleConfig = {
 type ChannelProgress = {
     deposited: bigint;
     lastCumulative: bigint;
-    lastSequence: number;
     maxCumulativeAmount: bigint;
     maxDepositAmount?: bigint;
     swigRoleId?: number;
 };
 
-export interface BudgetAuthorizerParameters {
+export interface SwigBudgetAuthorizerParameters {
     allowedPrograms?: string[];
-    buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
-    buildTopupTx?: (input: AuthorizeTopupInput) => Promise<string> | string;
+    buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     maxCumulativeAmount: string;
     maxDepositAmount?: string;
     requireApprovalOnTopup?: boolean;
@@ -76,15 +74,7 @@ export interface BudgetAuthorizerParameters {
     validUntil?: string;
 }
 
-/**
- * Session authorizer for `regular_budget` mode.
- *
- * Budget limits are fail-closed against a concrete on-chain Swig role:
- * - `authorizeOpen` reads role constraints from chain and clamps local limits.
- * - `authorizeUpdate`/`authorizeTopup`/`authorizeClose` require open-time state.
- * - Program access and spend caps are validated from Swig role actions.
- */
-export class BudgetAuthorizer implements SessionAuthorizer {
+export class SwigBudgetAuthorizer implements SessionAuthorizer {
     private readonly signer: MessagePartialSigner;
     private readonly maxCumulativeAmount: bigint;
     private readonly maxDepositAmount?: bigint;
@@ -93,16 +83,15 @@ export class BudgetAuthorizer implements SessionAuthorizer {
     private readonly allowedPrograms?: Set<string>;
     private readonly swig: SwigOnChainRoleConfig;
     private readonly buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
-    private readonly buildTopupTx?: (input: AuthorizeTopupInput) => Promise<string> | string;
-    private readonly buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
+    private readonly buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     private readonly channels = new Map<string, ChannelProgress>();
     private readonly capabilities: AuthorizerCapabilities;
     private swigLoaded = false;
     private swigModule: BudgetSwigModule | null = null;
 
-    constructor(parameters: BudgetAuthorizerParameters) {
+    constructor(parameters: SwigBudgetAuthorizerParameters) {
         if (!parameters.swig) {
-            throw new Error('BudgetAuthorizer requires `swig` configuration with on-chain role details');
+            throw new Error('SwigBudgetAuthorizer requires `swig` configuration with on-chain role details');
         }
 
         if (!Number.isInteger(parameters.swig.swigRoleId) || parameters.swig.swigRoleId < 0) {
@@ -133,8 +122,7 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             this.swigLoaded = true;
         }
         this.buildOpenTx = parameters.buildOpenTx;
-        this.buildTopupTx = parameters.buildTopupTx;
-        this.buildCloseTx = parameters.buildCloseTx;
+        this.buildTopUpTx = parameters.buildTopUpTx;
 
         this.capabilities = {
             mode: 'regular_budget',
@@ -142,12 +130,12 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             maxCumulativeAmount: this.maxCumulativeAmount.toString(),
             ...(parameters.maxDepositAmount ? { maxDepositAmount: parameters.maxDepositAmount } : {}),
             ...(parameters.allowedPrograms ? { allowedPrograms: [...parameters.allowedPrograms] } : {}),
-            allowedActions: ['open', 'update', 'topup', 'close'],
+            allowedActions: ['open', 'voucher', 'topUp', 'close'],
             requiresInteractiveApproval: {
                 close: false,
                 open: false,
-                topup: parameters.requireApprovalOnTopup ?? false,
-                update: false,
+                topUp: parameters.requireApprovalOnTopup ?? false,
+                voucher: false,
             },
         };
     }
@@ -164,7 +152,6 @@ export class BudgetAuthorizer implements SessionAuthorizer {
         this.assertNotExpired();
         this.assertProgramAllowed(input.channelProgram);
 
-        // Pin this channel's effective limits from on-chain role metadata.
         const onChainConstraints = await this.resolveOnChainConstraints(input);
 
         const deposit = parseNonNegativeAmount(input.depositAmount, 'depositAmount');
@@ -173,118 +160,94 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             throw new Error(`Open deposit exceeds maxDepositAmount (${maxDepositAmount.toString()})`);
         }
 
-        const openTx = await this.resolveOpenTx(input);
+        const transaction = await this.resolveOpenTx(input);
 
         const voucher = await signVoucher(this.signer, {
             channelId: input.channelId,
             cumulativeAmount: '0',
-            meter: input.pricing?.meter ?? 'session',
-            payer: this.signer.address,
-            recipient: input.recipient,
-            sequence: 0,
-            units: '0',
             ...(this.validUntil ? { expiresAt: this.validUntil } : {}),
-            chainId: normalizeChainId(input.network),
-            channelProgram: input.channelProgram,
-            serverNonce: input.serverNonce,
         });
 
         this.channels.set(input.channelId, {
             deposited: deposit,
             lastCumulative: 0n,
-            lastSequence: 0,
             maxCumulativeAmount: onChainConstraints.maxCumulativeAmount ?? this.maxCumulativeAmount,
             ...(maxDepositAmount !== undefined ? { maxDepositAmount } : {}),
             swigRoleId: onChainConstraints.swigRoleId,
         });
 
-        return {
-            capabilities: this.getCapabilities(),
-            openTx,
-            voucher,
-            ...(this.validUntil ? { expiresAt: this.validUntil } : {}),
-        };
+        return { transaction, voucher };
     }
 
-    async authorizeUpdate(input: AuthorizeUpdateInput): Promise<AuthorizedUpdate> {
+    async authorizeVoucher(input: AuthorizeVoucherInput): Promise<AuthorizedVoucher> {
         this.assertNotExpired();
-        this.assertProgramAllowed(input.channelProgram);
 
         const cumulativeAmount = parseNonNegativeAmount(input.cumulativeAmount, 'cumulativeAmount');
 
         const progress = this.channels.get(input.channelId);
         if (!progress) {
-            throw new Error(`Unknown channel ${input.channelId}. Call authorizeOpen before authorizeUpdate.`);
+            throw new Error(`Unknown channel ${input.channelId}. Call authorizeOpen before authorizeVoucher.`);
         }
 
-        const maxCumulativeAmount = progress.maxCumulativeAmount;
-
-        if (cumulativeAmount > maxCumulativeAmount) {
-            throw new Error(`Cumulative amount exceeds maxCumulativeAmount (${maxCumulativeAmount.toString()})`);
+        if (cumulativeAmount > progress.maxCumulativeAmount) {
+            throw new Error(
+                `Cumulative amount exceeds maxCumulativeAmount (${progress.maxCumulativeAmount.toString()})`,
+            );
         }
 
-        this.assertMonotonic(input.channelId, input.sequence, cumulativeAmount, progress);
+        if (cumulativeAmount < progress.lastCumulative) {
+            throw new Error(
+                `Cumulative amount must not decrease for channel ${input.channelId}. Last=${progress.lastCumulative.toString()}, received=${cumulativeAmount.toString()}`,
+            );
+        }
 
         const voucher = await signVoucher(this.signer, {
             channelId: input.channelId,
             cumulativeAmount: cumulativeAmount.toString(),
-            meter: input.meter,
-            payer: this.signer.address,
-            recipient: input.recipient,
-            sequence: input.sequence,
-            units: input.units,
             ...(this.validUntil ? { expiresAt: this.validUntil } : {}),
-            chainId: normalizeChainId(input.network),
-            channelProgram: input.channelProgram,
-            serverNonce: input.serverNonce,
         });
 
         this.channels.set(input.channelId, {
-            deposited: progress.deposited,
+            ...progress,
             lastCumulative: cumulativeAmount,
-            lastSequence: input.sequence,
-            maxCumulativeAmount,
-            ...(progress.maxDepositAmount !== undefined ? { maxDepositAmount: progress.maxDepositAmount } : {}),
-            ...(progress.swigRoleId !== undefined ? { swigRoleId: progress.swigRoleId } : {}),
         });
 
         return { voucher };
     }
 
-    async authorizeTopup(input: AuthorizeTopupInput): Promise<AuthorizedTopup> {
+    async authorizeTopUp(input: AuthorizeTopUpInput): Promise<AuthorizedTopUp> {
         this.assertNotExpired();
         this.assertProgramAllowed(input.channelProgram);
 
         const additionalAmount = parseNonNegativeAmount(input.additionalAmount, 'additionalAmount');
         const progress = this.channels.get(input.channelId);
         if (!progress) {
-            throw new Error(`Unknown channel ${input.channelId}. Call authorizeOpen before authorizeTopup.`);
+            throw new Error(`Unknown channel ${input.channelId}. Call authorizeOpen before authorizeTopUp.`);
         }
 
         const nextDeposited = progress.deposited + additionalAmount;
         const maxDepositAmount = progress.maxDepositAmount ?? this.maxDepositAmount;
 
         if (maxDepositAmount !== undefined && nextDeposited > maxDepositAmount) {
-            throw new Error(`Topup exceeds maxDepositAmount (${maxDepositAmount.toString()})`);
+            throw new Error(`TopUp exceeds maxDepositAmount (${maxDepositAmount.toString()})`);
         }
 
-        const topupTx = await this.resolveTopupTx(input);
+        const transaction = await this.resolveTopUpTx(input);
 
         this.channels.set(input.channelId, {
+            ...progress,
             deposited: nextDeposited,
-            lastCumulative: progress.lastCumulative,
-            lastSequence: progress.lastSequence,
-            maxCumulativeAmount: progress.maxCumulativeAmount,
-            ...(maxDepositAmount !== undefined ? { maxDepositAmount } : {}),
-            ...(progress.swigRoleId !== undefined ? { swigRoleId: progress.swigRoleId } : {}),
         });
 
-        return { topupTx };
+        return { transaction };
     }
 
     async authorizeClose(input: AuthorizeCloseInput): Promise<AuthorizedClose> {
         this.assertNotExpired();
-        this.assertProgramAllowed(input.channelProgram);
+
+        if (!input.finalCumulativeAmount) {
+            return {};
+        }
 
         const finalCumulativeAmount = parseNonNegativeAmount(input.finalCumulativeAmount, 'finalCumulativeAmount');
 
@@ -293,43 +256,30 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             throw new Error(`Unknown channel ${input.channelId}. Call authorizeOpen before authorizeClose.`);
         }
 
-        const maxCumulativeAmount = progress.maxCumulativeAmount;
-
-        if (finalCumulativeAmount > maxCumulativeAmount) {
-            throw new Error(`Final cumulative amount exceeds maxCumulativeAmount (${maxCumulativeAmount.toString()})`);
+        if (finalCumulativeAmount > progress.maxCumulativeAmount) {
+            throw new Error(
+                `Final cumulative amount exceeds maxCumulativeAmount (${progress.maxCumulativeAmount.toString()})`,
+            );
         }
 
-        this.assertMonotonic(input.channelId, input.sequence, finalCumulativeAmount, progress);
+        if (finalCumulativeAmount < progress.lastCumulative) {
+            throw new Error(
+                `Cumulative amount must not decrease for channel ${input.channelId}. Last=${progress.lastCumulative.toString()}, received=${finalCumulativeAmount.toString()}`,
+            );
+        }
 
         const voucher = await signVoucher(this.signer, {
             channelId: input.channelId,
             cumulativeAmount: finalCumulativeAmount.toString(),
-            meter: 'close',
-            payer: this.signer.address,
-            recipient: input.recipient,
-            sequence: input.sequence,
-            units: '0',
             ...(this.validUntil ? { expiresAt: this.validUntil } : {}),
-            chainId: normalizeChainId(input.network),
-            channelProgram: input.channelProgram,
-            serverNonce: input.serverNonce,
         });
-
-        const closeTx = await this.resolveCloseTx(input);
 
         this.channels.set(input.channelId, {
-            deposited: progress.deposited,
+            ...progress,
             lastCumulative: finalCumulativeAmount,
-            lastSequence: input.sequence,
-            maxCumulativeAmount,
-            ...(progress.maxDepositAmount !== undefined ? { maxDepositAmount: progress.maxDepositAmount } : {}),
-            ...(progress.swigRoleId !== undefined ? { swigRoleId: progress.swigRoleId } : {}),
         });
 
-        return {
-            voucher,
-            ...(closeTx ? { closeTx } : {}),
-        };
+        return { voucher };
     }
 
     private assertNotExpired() {
@@ -348,39 +298,11 @@ export class BudgetAuthorizer implements SessionAuthorizer {
         }
     }
 
-    private assertMonotonic(
-        channelId: string,
-        sequence: number,
-        cumulativeAmount: bigint,
-        progress: ChannelProgress | undefined,
-    ) {
-        if (!Number.isInteger(sequence) || sequence < 0) {
-            throw new Error('Sequence must be a non-negative integer');
-        }
-
-        if (!progress) {
-            return;
-        }
-
-        if (sequence <= progress.lastSequence) {
-            throw new Error(
-                `Sequence must increase for channel ${channelId}. Last=${progress.lastSequence}, received=${sequence}`,
-            );
-        }
-
-        if (cumulativeAmount < progress.lastCumulative) {
-            throw new Error(
-                `Cumulative amount must not decrease for channel ${channelId}. Last=${progress.lastCumulative.toString()}, received=${cumulativeAmount.toString()}`,
-            );
-        }
-    }
-
     private async resolveOnChainConstraints(input: AuthorizeOpenInput): Promise<{
         maxCumulativeAmount: bigint;
         maxDepositAmount: bigint;
         swigRoleId: number;
     }> {
-        // Budget mode requires Swig action metadata at runtime.
         await this.ensureSwigInstalled();
 
         const swigModule = this.swigModule;
@@ -405,10 +327,14 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             throw new Error(`Swig role ${role.id} does not allow channel program ${input.channelProgram}`);
         }
 
-        const onChainLimit = this.resolveOnChainSpendLimit(actions, input);
+        const isSpl = input.currency !== 'sol';
+        const onChainLimit = isSpl
+            ? this.resolveTokenSpendLimit(actions, input.currency)
+            : this.resolveSolSpendLimit(actions);
+
         if (onChainLimit === null) {
             throw new Error(
-                `Swig role ${role.id} has uncapped ${input.asset.kind.toUpperCase()} spending; BudgetAuthorizer requires an on-chain spend cap`,
+                `Swig role ${role.id} has uncapped spending; SwigBudgetAuthorizer requires an on-chain spend cap`,
             );
         }
 
@@ -421,7 +347,6 @@ export class BudgetAuthorizer implements SessionAuthorizer {
     }
 
     private resolveSwigRole(swig: SwigAccount): SwigRole {
-        // Role ID is required by construction, so this path is deterministic.
         if (!swig.findRoleById) {
             throw new Error('Swig account object does not expose findRoleById() required for configured swigRoleId');
         }
@@ -455,23 +380,17 @@ export class BudgetAuthorizer implements SessionAuthorizer {
         throw new Error(`Configured Swig role ${role.id} does not match signer ${this.signer.address}`);
     }
 
-    private resolveOnChainSpendLimit(actions: SwigRoleActions, input: AuthorizeOpenInput): bigint | null {
-        if (input.asset.kind === 'spl') {
-            if (!input.asset.mint) {
-                throw new Error('asset.mint is required for SPL budget validation');
-            }
-
-            if (!actions.tokenSpendLimit) {
-                throw new Error('Swig role does not expose tokenSpendLimit() for SPL budget validation');
-            }
-
-            return actions.tokenSpendLimit(input.asset.mint);
+    private resolveTokenSpendLimit(actions: SwigRoleActions, currency: string): bigint | null {
+        if (!actions.tokenSpendLimit) {
+            throw new Error('Swig role does not expose tokenSpendLimit() for SPL budget validation');
         }
+        return actions.tokenSpendLimit(currency);
+    }
 
+    private resolveSolSpendLimit(actions: SwigRoleActions): bigint | null {
         if (!actions.solSpendLimit) {
             throw new Error('Swig role does not expose solSpendLimit() for SOL budget validation');
         }
-
         return actions.solSpendLimit();
     }
 
@@ -497,33 +416,25 @@ export class BudgetAuthorizer implements SessionAuthorizer {
             this.swigLoaded = true;
         } catch {
             throw new Error(
-                'BudgetAuthorizer with `swig` config requires optional dependency `@swig-wallet/kit`. Install it with `npm install @swig-wallet/kit`.',
+                'SwigBudgetAuthorizer with `swig` config requires optional dependency `@swig-wallet/kit`. Install it with `npm install @swig-wallet/kit`.',
             );
         }
     }
 
     private async resolveOpenTx(input: AuthorizeOpenInput): Promise<string> {
         if (!this.buildOpenTx) {
-            throw new Error('BudgetAuthorizer requires `buildOpenTx` to authorize open requests');
+            throw new Error('SwigBudgetAuthorizer requires `buildOpenTx` to authorize open requests');
         }
 
         return await this.buildOpenTx(input);
     }
 
-    private async resolveTopupTx(input: AuthorizeTopupInput): Promise<string> {
-        if (!this.buildTopupTx) {
-            throw new Error('BudgetAuthorizer requires `buildTopupTx` to authorize topup requests');
+    private async resolveTopUpTx(input: AuthorizeTopUpInput): Promise<string> {
+        if (!this.buildTopUpTx) {
+            throw new Error('SwigBudgetAuthorizer requires `buildTopUpTx` to authorize topUp requests');
         }
 
-        return await this.buildTopupTx(input);
-    }
-
-    private async resolveCloseTx(input: AuthorizeCloseInput): Promise<string | undefined> {
-        if (!this.buildCloseTx) {
-            return undefined;
-        }
-
-        return await this.buildCloseTx(input);
+        return await this.buildTopUpTx(input);
     }
 }
 
@@ -532,7 +443,6 @@ function collectAuthorityAddresses(authority: SwigRoleAuthority | undefined): st
         return [];
     }
 
-    // Some Swig authority variants expose only one of these fields.
     const candidates = [authority.publicKey, authority.ed25519PublicKey, authority.sessionKey];
 
     return candidates.map(candidate => candidate?.toBase58?.()).filter((candidate): candidate is string => !!candidate);
@@ -563,12 +473,4 @@ function parseIsoTimestamp(value: string, field: string): number {
 
 function minBigInt(a: bigint, b: bigint): bigint {
     return a <= b ? a : b;
-}
-
-function normalizeChainId(network: string): string {
-    const normalized = network.trim();
-    if (normalized.length === 0) {
-        throw new Error('network must be a non-empty string');
-    }
-    return normalized.startsWith('solana:') ? normalized : `solana:${normalized}`;
 }

@@ -7,3 +7,13 @@ dist/
 target/
 Cargo.lock
 .surfpool
+
+# Anchor
+.anchor/
+test-ledger/
+programs/mpp-channel-keypair.json
+
+# Local development files
+CLAUDE.md
+docs/
+scripts/

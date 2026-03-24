@@ -13,10 +13,10 @@ export type {
     SessionAuthorizer,
     AuthorizeOpenInput,
     AuthorizedOpen,
-    AuthorizeUpdateInput,
-    AuthorizedUpdate,
-    AuthorizeTopupInput,
-    AuthorizedTopup,
+    AuthorizeVoucherInput,
+    AuthorizedVoucher,
+    AuthorizeTopUpInput,
+    AuthorizedTopUp,
     AuthorizeCloseInput,
     AuthorizedClose,
     AuthorizerCapabilities,
@@ -24,7 +24,7 @@ export type {
 } from './session/Types.js';
 
 export {
-    BudgetAuthorizer,
+    SwigBudgetAuthorizer,
     SwigSessionAuthorizer,
     UnboundedAuthorizer,
     makeSessionAuthorizer,

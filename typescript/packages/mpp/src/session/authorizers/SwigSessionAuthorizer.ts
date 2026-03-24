@@ -5,12 +5,12 @@ import {
     type AuthorizeCloseInput,
     type AuthorizedClose,
     type AuthorizedOpen,
-    type AuthorizedTopup,
-    type AuthorizedUpdate,
+    type AuthorizedTopUp,
+    type AuthorizedVoucher,
     type AuthorizeOpenInput,
     type AuthorizerCapabilities,
-    type AuthorizeTopupInput,
-    type AuthorizeUpdateInput,
+    type AuthorizeTopUpInput,
+    type AuthorizeVoucherInput,
     type SessionAuthorizer,
     type SessionPolicyProfile,
     type SessionVoucher,
@@ -50,7 +50,6 @@ type SessionSignerState = {
 type ChannelProgress = {
     deposited: bigint;
     lastCumulative: bigint;
-    lastSequence: number;
     signerAddress: string;
     swigRoleId?: number;
 };
@@ -82,21 +81,14 @@ export interface SwigWalletAdapter {
 
 export interface SwigSessionAuthorizerParameters {
     allowedPrograms?: string[];
-    buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
     buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
-    buildTopupTx?: (input: AuthorizeTopupInput) => Promise<string> | string;
+    buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     policy: SwigPolicy;
     rpcUrl?: string;
     swigModule?: SwigSessionModule;
     wallet: SwigWalletAdapter;
 }
 
-/**
- * Session authorizer for `swig_session` mode.
- *
- * This authorizer binds delegated session keys to on-chain Swig role policy
- * before issuing vouchers, then keeps channel state tied to that signer/role.
- */
 export class SwigSessionAuthorizer implements SessionAuthorizer {
     private readonly wallet: SwigWalletAdapter;
     private readonly policy: SwigPolicy;
@@ -105,15 +97,14 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
     private readonly spendLimit?: bigint;
     private readonly depositLimit?: bigint;
     private readonly buildOpenTx?: (input: AuthorizeOpenInput) => Promise<string> | string;
-    private readonly buildTopupTx?: (input: AuthorizeTopupInput) => Promise<string> | string;
-    private readonly buildCloseTx?: (input: AuthorizeCloseInput) => Promise<string> | string;
+    private readonly buildTopUpTx?: (input: AuthorizeTopUpInput) => Promise<string> | string;
     private readonly channels = new Map<string, ChannelProgress>();
 
     private swigLoaded = false;
     private swigModule: SwigSessionModule | null = null;
     private sessionSigner: KeyPairSigner | null = null;
     private sessionStartedAtMs: number | null = null;
-    private sessionOpenTx: string | null = null;
+    private sessionOpenTransaction: string | null = null;
     private sessionRoleId: number | null = null;
     private validatedPolicyForSessionSigner: string | null = null;
 
@@ -139,8 +130,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
                 ? parseNonNegativeAmount(this.policy.depositLimit, 'depositLimit')
                 : undefined;
         this.buildOpenTx = parameters.buildOpenTx;
-        this.buildTopupTx = parameters.buildTopupTx;
-        this.buildCloseTx = parameters.buildCloseTx;
+        this.buildTopUpTx = parameters.buildTopUpTx;
     }
 
     getMode() {
@@ -154,12 +144,12 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
             ...(this.policy.spendLimit ? { maxCumulativeAmount: this.policy.spendLimit } : {}),
             ...(this.policy.depositLimit ? { maxDepositAmount: this.policy.depositLimit } : {}),
             ...(this.allowedPrograms ? { allowedPrograms: [...this.allowedPrograms] } : {}),
-            allowedActions: ['open', 'update', 'topup', 'close'],
+            allowedActions: ['open', 'voucher', 'topUp', 'close'],
             requiresInteractiveApproval: {
                 close: false,
                 open: true,
-                topup: !this.policy.autoTopup?.enabled,
-                update: false,
+                topUp: !this.policy.autoTopup?.enabled,
+                voucher: false,
             },
         };
     }
@@ -177,42 +167,27 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         await this.assertPolicyAppliedOnChain(input, session);
 
         const sessionSigner = session.signer;
-        const openTx = await this.resolveOpenTx(input, session);
+        const transaction = await this.resolveOpenTx(input, session);
         const expiresAt = this.getSessionExpiresAt();
 
         const voucher = await this.signSwigVoucher(sessionSigner, {
-            chainId: normalizeChainId(input.network),
             channelId: input.channelId,
-            channelProgram: input.channelProgram,
             cumulativeAmount: '0',
             expiresAt,
-            meter: input.pricing?.meter ?? 'session',
-            payer: this.wallet.address,
-            recipient: input.recipient,
-            sequence: 0,
-            serverNonce: input.serverNonce,
-            units: '0',
         });
 
         this.channels.set(input.channelId, {
             deposited: deposit,
             lastCumulative: 0n,
-            lastSequence: 0,
             signerAddress: sessionSigner.address,
             ...(session.swigRoleId !== undefined ? { swigRoleId: session.swigRoleId } : {}),
         });
 
-        return {
-            capabilities: this.getCapabilities(),
-            expiresAt,
-            openTx,
-            voucher,
-        };
+        return { transaction, voucher };
     }
 
-    async authorizeUpdate(input: AuthorizeUpdateInput): Promise<AuthorizedUpdate> {
+    async authorizeVoucher(input: AuthorizeVoucherInput): Promise<AuthorizedVoucher> {
         await this.ensureSwigInstalled();
-        this.assertProgramAllowed(input.channelProgram);
 
         const cumulativeAmount = parseNonNegativeAmount(input.cumulativeAmount, 'cumulativeAmount');
         if (this.spendLimit !== undefined && cumulativeAmount > this.spendLimit) {
@@ -222,26 +197,21 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         const progress = this.channels.get(input.channelId);
         const sessionSigner = this.requireActiveSessionSigner(input.channelId, progress);
 
-        this.assertMonotonic(input.channelId, input.sequence, cumulativeAmount, progress);
+        if (progress && cumulativeAmount < progress.lastCumulative) {
+            throw new Error(
+                `Cumulative amount must not decrease for channel ${input.channelId}. Last=${progress.lastCumulative.toString()}, received=${cumulativeAmount.toString()}`,
+            );
+        }
 
         const voucher = await this.signSwigVoucher(sessionSigner, {
-            chainId: normalizeChainId(input.network),
             channelId: input.channelId,
-            channelProgram: input.channelProgram,
             cumulativeAmount: cumulativeAmount.toString(),
             expiresAt: this.getSessionExpiresAt(),
-            meter: input.meter,
-            payer: this.wallet.address,
-            recipient: input.recipient,
-            sequence: input.sequence,
-            serverNonce: input.serverNonce,
-            units: input.units,
         });
 
         this.channels.set(input.channelId, {
             deposited: progress?.deposited ?? 0n,
             lastCumulative: cumulativeAmount,
-            lastSequence: input.sequence,
             signerAddress: sessionSigner.address,
             ...(progress?.swigRoleId !== undefined
                 ? { swigRoleId: progress.swigRoleId }
@@ -253,26 +223,25 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         return { voucher };
     }
 
-    async authorizeTopup(input: AuthorizeTopupInput): Promise<AuthorizedTopup> {
+    async authorizeTopUp(input: AuthorizeTopUpInput): Promise<AuthorizedTopUp> {
         await this.ensureSwigInstalled();
         this.assertProgramAllowed(input.channelProgram);
 
         const progress = this.channels.get(input.channelId);
-        const sessionSigner = this.requireActiveSessionSigner(input.channelId, progress);
+        this.requireActiveSessionSigner(input.channelId, progress);
         const additionalAmount = parseNonNegativeAmount(input.additionalAmount, 'additionalAmount');
 
         const nextDeposited = (progress?.deposited ?? 0n) + additionalAmount;
         if (this.depositLimit !== undefined && nextDeposited > this.depositLimit) {
-            throw new Error(`Topup exceeds depositLimit (${this.depositLimit.toString()})`);
+            throw new Error(`TopUp exceeds depositLimit (${this.depositLimit.toString()})`);
         }
 
-        const topupTx = await this.resolveTopupTx(input);
+        const transaction = await this.resolveTopUpTx(input);
 
         this.channels.set(input.channelId, {
             deposited: nextDeposited,
             lastCumulative: progress?.lastCumulative ?? 0n,
-            lastSequence: progress?.lastSequence ?? 0,
-            signerAddress: sessionSigner.address,
+            signerAddress: progress?.signerAddress ?? this.sessionSigner!.address,
             ...(progress?.swigRoleId !== undefined
                 ? { swigRoleId: progress.swigRoleId }
                 : this.sessionRoleId !== null
@@ -280,12 +249,15 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
                   : {}),
         });
 
-        return { topupTx };
+        return { transaction };
     }
 
     async authorizeClose(input: AuthorizeCloseInput): Promise<AuthorizedClose> {
         await this.ensureSwigInstalled();
-        this.assertProgramAllowed(input.channelProgram);
+
+        if (!input.finalCumulativeAmount) {
+            return {};
+        }
 
         const finalCumulativeAmount = parseNonNegativeAmount(input.finalCumulativeAmount, 'finalCumulativeAmount');
         if (this.spendLimit !== undefined && finalCumulativeAmount > this.spendLimit) {
@@ -295,28 +267,21 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         const progress = this.channels.get(input.channelId);
         const sessionSigner = this.requireActiveSessionSigner(input.channelId, progress);
 
-        this.assertMonotonic(input.channelId, input.sequence, finalCumulativeAmount, progress);
+        if (progress && finalCumulativeAmount < progress.lastCumulative) {
+            throw new Error(
+                `Cumulative amount must not decrease for channel ${input.channelId}. Last=${progress.lastCumulative.toString()}, received=${finalCumulativeAmount.toString()}`,
+            );
+        }
 
         const voucher = await this.signSwigVoucher(sessionSigner, {
-            chainId: normalizeChainId(input.network),
             channelId: input.channelId,
-            channelProgram: input.channelProgram,
             cumulativeAmount: finalCumulativeAmount.toString(),
             expiresAt: this.getSessionExpiresAt(),
-            meter: 'close',
-            payer: this.wallet.address,
-            recipient: input.recipient,
-            sequence: input.sequence,
-            serverNonce: input.serverNonce,
-            units: '0',
         });
-
-        const closeTx = await this.resolveCloseTx(input);
 
         this.channels.set(input.channelId, {
             deposited: progress?.deposited ?? 0n,
             lastCumulative: finalCumulativeAmount,
-            lastSequence: input.sequence,
             signerAddress: sessionSigner.address,
             ...(progress?.swigRoleId !== undefined
                 ? { swigRoleId: progress.swigRoleId }
@@ -325,10 +290,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
                   : {}),
         });
 
-        return {
-            voucher,
-            ...(closeTx ? { closeTx } : {}),
-        };
+        return { voucher };
     }
 
     private async signSwigVoucher(signer: KeyPairSigner, voucher: SessionVoucher): Promise<SignedSessionVoucher> {
@@ -346,33 +308,6 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
 
         if (!this.allowedPrograms.has(channelProgram)) {
             throw new Error(`Channel program is not allowed: ${channelProgram}`);
-        }
-    }
-
-    private assertMonotonic(
-        channelId: string,
-        sequence: number,
-        cumulativeAmount: bigint,
-        progress: ChannelProgress | undefined,
-    ) {
-        if (!Number.isInteger(sequence) || sequence < 0) {
-            throw new Error('Sequence must be a non-negative integer');
-        }
-
-        if (!progress) {
-            return;
-        }
-
-        if (sequence <= progress.lastSequence) {
-            throw new Error(
-                `Sequence must increase for channel ${channelId}. Last=${progress.lastSequence}, received=${sequence}`,
-            );
-        }
-
-        if (cumulativeAmount < progress.lastCumulative) {
-            throw new Error(
-                `Cumulative amount must not decrease for channel ${channelId}. Last=${progress.lastCumulative.toString()}, received=${cumulativeAmount.toString()}`,
-            );
         }
     }
 
@@ -408,7 +343,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         if (this.sessionSigner && !this.isSessionExpired()) {
             return {
                 signer: this.sessionSigner,
-                ...(this.sessionOpenTx ? { openTx: this.sessionOpenTx } : {}),
+                ...(this.sessionOpenTransaction ? { openTx: this.sessionOpenTransaction } : {}),
                 ...(this.sessionRoleId !== null ? { swigRoleId: this.sessionRoleId } : {}),
                 ...(this.sessionStartedAtMs !== null ? { createdAtMs: this.sessionStartedAtMs } : {}),
             };
@@ -418,7 +353,6 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         if (existingResult) {
             const existing = normalizeSessionSignerState(existingResult, 'getSessionKey');
 
-            // Reuse only when wallet can prove when this session actually started.
             if (existing.createdAtMs !== undefined) {
                 this.setSessionState(existing);
                 return existing;
@@ -506,26 +440,18 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         return await this.buildOpenTx(input);
     }
 
-    private async resolveTopupTx(input: AuthorizeTopupInput): Promise<string> {
-        if (!this.buildTopupTx) {
-            throw new Error('SwigSessionAuthorizer requires `buildTopupTx` to authorize topup requests');
+    private async resolveTopUpTx(input: AuthorizeTopUpInput): Promise<string> {
+        if (!this.buildTopUpTx) {
+            throw new Error('SwigSessionAuthorizer requires `buildTopUpTx` to authorize topUp requests');
         }
 
-        return await this.buildTopupTx(input);
-    }
-
-    private async resolveCloseTx(input: AuthorizeCloseInput): Promise<string | undefined> {
-        if (!this.buildCloseTx) {
-            return undefined;
-        }
-
-        return await this.buildCloseTx(input);
+        return await this.buildTopUpTx(input);
     }
 
     private setSessionState(state: SessionSignerState) {
         this.sessionSigner = state.signer;
         this.sessionStartedAtMs = state.createdAtMs ?? Date.now();
-        this.sessionOpenTx = state.openTx ?? null;
+        this.sessionOpenTransaction = state.openTx ?? null;
         this.sessionRoleId = state.swigRoleId ?? this.wallet.swigRoleId ?? null;
         this.validatedPolicyForSessionSigner = null;
     }
@@ -535,7 +461,6 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
     }
 
     private async assertPolicyAppliedOnChain(input: AuthorizeOpenInput, session: SessionSignerState) {
-        // Cache by delegated signer to avoid repeating RPC lookups on every open.
         if (this.validatedPolicyForSessionSigner === session.signer.address) {
             return;
         }
@@ -564,16 +489,19 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
 
         this.assertRoleAllowsProgram(actions, input.channelProgram, role.id);
 
-        const onChainSpendLimit = this.resolveOnChainSpendLimit(actions, input);
-        this.assertLimitAtMostPolicy(onChainSpendLimit, this.spendLimit, 'spendLimit', role.id, input.asset);
-        this.assertLimitAtMostPolicy(onChainSpendLimit, this.depositLimit, 'depositLimit', role.id, input.asset);
+        const isSpl = input.currency !== 'sol';
+        const onChainSpendLimit = isSpl
+            ? this.resolveTokenSpendLimit(actions, input.currency)
+            : this.resolveSolSpendLimit(actions);
+
+        this.assertLimitAtMostPolicy(onChainSpendLimit, this.spendLimit, 'spendLimit', role.id, input.currency);
+        this.assertLimitAtMostPolicy(onChainSpendLimit, this.depositLimit, 'depositLimit', role.id, input.currency);
 
         this.sessionRoleId = role.id;
         this.validatedPolicyForSessionSigner = session.signer.address;
     }
 
     private resolveSessionRole(swig: SwigAccount, session: SessionSignerState): SwigRole {
-        // Prefer explicit role binding, then validate it against session key lookup.
         const preferredRoleId = session.swigRoleId ?? this.sessionRoleId ?? this.wallet.swigRoleId;
 
         if (preferredRoleId !== undefined && preferredRoleId !== null && swig.findRoleById) {
@@ -624,23 +552,17 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         }
     }
 
-    private resolveOnChainSpendLimit(actions: SwigRoleActions, input: AuthorizeOpenInput): bigint | null {
-        if (input.asset.kind === 'spl') {
-            if (!input.asset.mint) {
-                throw new Error('asset.mint is required for SPL session policy validation');
-            }
-
-            if (!actions.tokenSpendLimit) {
-                throw new Error('Swig role does not expose tokenSpendLimit() for SPL policy validation');
-            }
-
-            return actions.tokenSpendLimit(input.asset.mint);
+    private resolveTokenSpendLimit(actions: SwigRoleActions, currency: string): bigint | null {
+        if (!actions.tokenSpendLimit) {
+            throw new Error('Swig role does not expose tokenSpendLimit() for SPL policy validation');
         }
+        return actions.tokenSpendLimit(currency);
+    }
 
+    private resolveSolSpendLimit(actions: SwigRoleActions): bigint | null {
         if (!actions.solSpendLimit) {
             throw new Error('Swig role does not expose solSpendLimit() for SOL policy validation');
         }
-
         return actions.solSpendLimit();
     }
 
@@ -649,7 +571,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
         policyLimit: bigint | undefined,
         field: 'depositLimit' | 'spendLimit',
         roleId: number,
-        asset: AuthorizeOpenInput['asset'],
+        currency: string,
     ) {
         if (policyLimit === undefined) {
             return;
@@ -657,7 +579,7 @@ export class SwigSessionAuthorizer implements SessionAuthorizer {
 
         if (onChainLimit === null) {
             throw new Error(
-                `Swig role ${roleId} has uncapped ${asset.kind.toUpperCase()} spending, but policy ${field}=${policyLimit.toString()} requires an on-chain cap`,
+                `Swig role ${roleId} has uncapped ${currency.toUpperCase()} spending, but policy ${field}=${policyLimit.toString()} requires an on-chain cap`,
             );
         }
 
@@ -673,7 +595,6 @@ function normalizeSessionSignerState(
     value: SwigSessionKeyResult,
     source: 'createSessionKey' | 'getSessionKey',
 ): SessionSignerState {
-    // Backward compatibility: some wallet adapters return a signer directly.
     if (isSignerLike(value)) {
         return { signer: value };
     }
@@ -756,12 +677,4 @@ function parseNonNegativeAmount(value: string, field: string): bigint {
     }
 
     return amount;
-}
-
-function normalizeChainId(network: string): string {
-    const normalized = network.trim();
-    if (normalized.length === 0) {
-        throw new Error('network must be a non-empty string');
-    }
-    return normalized.startsWith('solana:') ? normalized : `solana:${normalized}`;
 }

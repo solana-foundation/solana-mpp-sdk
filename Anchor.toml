@@ -1,0 +1,23 @@
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+mpp_channel = "21fLdahqKtVAt4V2JLwVrRb7tuqPADjjPVCU9bK3MFPQ"
+
+[programs.devnet]
+mpp_channel = "21fLdahqKtVAt4V2JLwVrRb7tuqPADjjPVCU9bK3MFPQ"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "pnpm exec vitest run --config typescript/vitest.config.anchor.ts"
+
+[hooks]

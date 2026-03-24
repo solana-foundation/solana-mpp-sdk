@@ -214,12 +214,19 @@ just ts-fmt              # Format and lint
 just ts-build            # Build
 just ts-test             # Unit tests (charge + session, no network)
 just ts-test-integration # Integration tests (requires Surfpool)
-# Rust
+
+# Rust client SDK
 cd rust && cargo build
 
+# Anchor program (programs/mpp-channel)
+# Prerequisites: Rust stable toolchain, Anchor CLI >=1.0.0-rc.2, solana-test-validator on PATH
+just anchor-build        # Compile the on-chain program
+just anchor-test         # Localnet integration tests (starts/stops validator automatically)
+
 # Everything
-just build            # Build both
-just test             # Test both
+just build            # Build TypeScript, Rust, and Anchor
+just test             # Unit tests (TypeScript + Rust, no network)
+just test-all         # All tests including integration and Anchor localnet
 just pre-commit       # Full pre-commit checks
 ```
 

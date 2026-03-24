@@ -20,6 +20,10 @@
         "./client": {
             "types": "./dist/client/index.d.ts",
             "default": "./dist/client/index.js"
+        },
+        "./anchor": {
+            "types": "./dist/anchor/index.d.ts",
+            "default": "./dist/anchor/index.js"
         }
     },
     "files": [

@@ -25,7 +25,7 @@ import { Actions, createEd25519SessionAuthorityInfo } from '@swig-wallet/lib';
 import { Receipt } from 'mppx';
 import { Mppx as ServerMppx, solana as serverSolana, Store } from '../../src/server/index.js';
 import { Mppx as ClientMppx, solana as clientSolana } from '../../src/client/index.js';
-import { BudgetAuthorizer, SwigSessionAuthorizer, UnboundedAuthorizer } from '../../src/index.js';
+import { SwigBudgetAuthorizer, SwigSessionAuthorizer, UnboundedAuthorizer } from '../../src/index.js';
 import * as SessionChannelStore from '../../src/session/ChannelStore.js';
 
 const RPC_URL = 'http://localhost:8899';
@@ -109,7 +109,8 @@ async function startSessionHarness(overrides: Partial<SessionServerParameters> =
             serverSolana.session({
                 recipient: recipientSigner.address,
                 network: 'localnet',
-                asset: { kind: 'sol', decimals: 9 },
+                currency: 'sol',
+                amount: '10',
                 channelProgram: SESSION_CHANNEL_PROGRAM,
                 store,
                 ...overrides,
@@ -160,7 +161,7 @@ function createUnboundedSessionAuthorizer() {
     return new UnboundedAuthorizer({
         signer: clientSigner,
         buildOpenTx: input => `open:${input.channelId}`,
-        buildTopupTx: input => `topup:${input.channelId}:${input.additionalAmount}`,
+        buildTopUpTx: input => `topup:${input.channelId}:${input.additionalAmount}`,
     });
 }
 
@@ -759,15 +760,10 @@ test('e2e: native SOL charge with splits', async () => {
 
 test('e2e: session auto-open then update over repeated requests', async () => {
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '1000',
-            ttlSeconds: 60,
-        },
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '1000',
+        ttlSeconds: 60,
     });
 
     try {
@@ -802,8 +798,7 @@ test('e2e: session auto-open then update over repeated requests', async () => {
         expect(channel).toBeTruthy();
         expect(channel!.status).toBe('open');
         expect(channel!.escrowedAmount).toBe('1000');
-        expect(channel!.lastAuthorizedAmount).toBe('10');
-        expect(channel!.lastSequence).toBe(1);
+        expect(channel!.acceptedCumulative).toBe('10');
 
         expect(events).toContain('challenge');
         expect(events).toContain('opening');
@@ -817,15 +812,10 @@ test('e2e: session auto-open then update over repeated requests', async () => {
 
 test('e2e: session autoTopup returns 204 management response, then resumes updates', async () => {
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '70',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '100',
-            ttlSeconds: 60,
-        },
+        amount: '70',
+        unitType: 'request',
+        suggestedDeposit: '100',
+        ttlSeconds: 60,
     });
 
     try {
@@ -853,8 +843,7 @@ test('e2e: session autoTopup returns 204 management response, then resumes updat
         const channelAfterTopup = await getSessionChannel(harness.store, channelId);
         expect(channelAfterTopup).toBeTruthy();
         expect(channelAfterTopup!.escrowedAmount).toBe('200');
-        expect(channelAfterTopup!.lastAuthorizedAmount).toBe('70');
-        expect(channelAfterTopup!.lastSequence).toBe(1);
+        expect(channelAfterTopup!.acceptedCumulative).toBe('70');
 
         const postTopupUpdateResponse = await mppx.fetch(endpoint);
         expect(postTopupUpdateResponse.status).toBe(200);
@@ -862,8 +851,7 @@ test('e2e: session autoTopup returns 204 management response, then resumes updat
 
         const channelAfterUpdate = await getSessionChannel(harness.store, channelId);
         expect(channelAfterUpdate).toBeTruthy();
-        expect(channelAfterUpdate!.lastAuthorizedAmount).toBe('140');
-        expect(channelAfterUpdate!.lastSequence).toBe(2);
+        expect(channelAfterUpdate!.acceptedCumulative).toBe('140');
     } finally {
         await harness.close();
     }
@@ -871,15 +859,10 @@ test('e2e: session autoTopup returns 204 management response, then resumes updat
 
 test('e2e: session can auto-close when limit is hit and autoTopup is disabled', async () => {
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '10',
-            ttlSeconds: 60,
-        },
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '10',
+        ttlSeconds: 60,
     });
 
     try {
@@ -919,15 +902,10 @@ test('e2e: session can auto-close when limit is hit and autoTopup is disabled', 
 
 test('e2e: session close action returns 204 and next request opens a new channel', async () => {
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '25',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '500',
-            ttlSeconds: 60,
-        },
+        amount: '25',
+        unitType: 'request',
+        suggestedDeposit: '500',
+        ttlSeconds: 60,
     });
 
     try {
@@ -965,7 +943,7 @@ test('e2e: session close action returns 204 and next request opens a new channel
         const reopenedChannel = await getSessionChannel(harness.store, reopenedReceipt.reference);
         expect(reopenedChannel).toBeTruthy();
         expect(reopenedChannel!.status).toBe('open');
-        expect(reopenedChannel!.lastSequence).toBe(0);
+        expect(reopenedChannel!.acceptedCumulative).toBe('0');
     } finally {
         await harness.close();
     }
@@ -981,23 +959,14 @@ test('e2e: session swig_session mode uses on-chain setup and enforces spend limi
 
     let verifiedOpenTx: string | null = null;
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '500',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['swig_session'],
-        },
-        transactionVerifier: {
-            async verifyOpen(_channelId, openTx) {
-                verifiedOpenTx = openTx;
-                const tx = await getConfirmedTransaction(client, openTx);
-                expect(tx).toBeTruthy();
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '500',
+        ttlSeconds: 60,
+        transactionHandler: {
+            async handleOpen(_channelId, transaction) {
+                verifiedOpenTx = transaction;
+                return 'mock-signature';
             },
         },
     });
@@ -1053,11 +1022,8 @@ test('e2e: session swig_session mode uses on-chain setup and enforces spend limi
 
         const channel = await getSessionChannel(harness.store, channelId);
         expect(channel).toBeTruthy();
-        expect(channel!.authorizationMode).toBe('swig_session');
-        expect(channel!.authority.wallet).toBe(clientSigner.address);
-        expect(channel!.authority.delegatedSessionKey).toBe(delegatedSigner!.address);
-        expect(channel!.lastAuthorizedAmount).toBe('10');
-        expect(channel!.lastSequence).toBe(1);
+        expect(channel!.authorizedSigner).toBe(delegatedSigner!.address);
+        expect(channel!.acceptedCumulative).toBe('10');
 
         const recipientBalanceBefore = await getBalance(client, recipientSigner.address);
 
@@ -1085,25 +1051,10 @@ test('e2e: session close can include on-chain settlement transaction', async () 
 
     let verifiedCloseTx: string | null = null;
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '500',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['swig_session'],
-        },
-        transactionVerifier: {
-            async verifyClose(_channelId, closeTx) {
-                verifiedCloseTx = closeTx;
-                const tx = await getConfirmedTransaction(client, closeTx);
-                expect(tx).toBeTruthy();
-            },
-        },
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '500',
+        ttlSeconds: 60,
     });
 
     try {
@@ -1131,8 +1082,6 @@ test('e2e: session close can include on-chain settlement transaction', async () 
             },
             rpcUrl: RPC_URL,
             allowedPrograms: [SESSION_CHANNEL_PROGRAM],
-            buildCloseTx: async ({ finalCumulativeAmount, recipient }) =>
-                await swig.spendFromSwig(BigInt(finalCumulativeAmount), recipient),
         });
 
         const clientMethod = clientSolana.session({
@@ -1175,29 +1124,14 @@ test('e2e: session regular_budget mode enforces on-chain Swig role limits', asyn
 
     let verifiedOpenTx: string | null = null;
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '400',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '500',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['regular_budget'],
-        },
-        transactionVerifier: {
-            async verifyOpen(_channelId, openTx) {
-                verifiedOpenTx = openTx;
-                const tx = await getConfirmedTransaction(client, openTx);
-                expect(tx).toBeTruthy();
-            },
-        },
+        amount: '400',
+        unitType: 'request',
+        suggestedDeposit: '500',
+        ttlSeconds: 60,
     });
 
     try {
-        const authorizer = new BudgetAuthorizer({
+        const authorizer = new SwigBudgetAuthorizer({
             signer: clientSigner,
             maxCumulativeAmount: '1000',
             swig: {
@@ -1210,7 +1144,7 @@ test('e2e: session regular_budget mode enforces on-chain Swig role limits', asyn
                     client,
                     destination: recipientSigner.address,
                 }),
-            buildTopupTx: async () =>
+            buildTopUpTx: async () =>
                 await sendMarkerTransfer({
                     client,
                     destination: recipientSigner.address,
@@ -1242,9 +1176,7 @@ test('e2e: session regular_budget mode enforces on-chain Swig role limits', asyn
 
         const channel = await getSessionChannel(harness.store, channelId);
         expect(channel).toBeTruthy();
-        expect(channel!.authorizationMode).toBe('regular_budget');
-        expect(channel!.lastAuthorizedAmount).toBe('400');
-        expect(channel!.lastSequence).toBe(1);
+        expect(channel!.acceptedCumulative).toBe('400');
     } finally {
         await harness.close();
     }
@@ -1260,18 +1192,10 @@ test('e2e: session swig_session mode rejects delegated signer not present on-cha
     });
 
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '100',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['swig_session'],
-        },
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '100',
+        ttlSeconds: 60,
     });
 
     try {
@@ -1321,22 +1245,14 @@ test('e2e: session regular_budget mode rejects unknown configured Swig role', as
     });
 
     const harness = await startSessionHarness({
-        pricing: {
-            unit: 'request',
-            amountPerUnit: '10',
-            meter: 'api_calls',
-        },
-        sessionDefaults: {
-            suggestedDeposit: '100',
-            ttlSeconds: 60,
-        },
-        verifier: {
-            acceptAuthorizationModes: ['regular_budget'],
-        },
+        amount: '10',
+        unitType: 'request',
+        suggestedDeposit: '100',
+        ttlSeconds: 60,
     });
 
     try {
-        const authorizer = new BudgetAuthorizer({
+        const authorizer = new SwigBudgetAuthorizer({
             signer: clientSigner,
             maxCumulativeAmount: '1000',
             swig: {
@@ -1349,7 +1265,7 @@ test('e2e: session regular_budget mode rejects unknown configured Swig role', as
                     client,
                     destination: recipientSigner.address,
                 }),
-            buildTopupTx: async () =>
+            buildTopUpTx: async () =>
                 await sendMarkerTransfer({
                     client,
                     destination: recipientSigner.address,

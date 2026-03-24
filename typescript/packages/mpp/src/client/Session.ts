@@ -4,61 +4,45 @@ import { type Challenge, Credential, Method, z } from 'mppx';
 import * as Methods from '../Methods.js';
 import type { SessionAuthorizer, SessionCredentialPayload } from '../session/Types.js';
 
-type SessionAsset = {
-    decimals: number;
-    kind: 'sol' | 'spl';
-    mint?: string;
-    symbol?: string;
-};
-
-type SessionPricing = {
-    amountPerUnit: string;
-    meter: string;
-    minDebit?: string;
-    unit: string;
-};
-
 type SessionChallengeRequest = {
-    asset: SessionAsset;
-    channelProgram: string;
-    network?: string;
-    pricing?: SessionPricing;
-    recipient: string;
-    sessionDefaults?: {
-        closeBehavior?: 'payer_must_close' | 'server_may_finalize';
-        settleInterval?: { kind: string; minIncrement?: string; seconds?: number };
-        suggestedDeposit?: string;
-        ttlSeconds?: number;
+    amount: string;
+    currency: string;
+    methodDetails: {
+        channelId?: string;
+        channelProgram: string;
+        decimals?: number;
+        feePayer?: boolean;
+        feePayerKey?: string;
+        minVoucherDelta?: string;
+        network?: string;
     };
+    recipient: string;
+    suggestedDeposit?: string;
+    unitType?: string;
 };
 
 type ActiveChannel = {
-    asset: SessionAsset;
     channelId: string;
     channelProgram: string;
     cumulativeAmount: bigint;
+    currency: string;
     depositAmount: bigint;
     network: string;
     recipient: string;
-    sequence: number;
-    serverNonce: string;
 };
 
 export const sessionContextSchema = z.object({
-    action: z.optional(z.enum(['open', 'update', 'topup', 'close'])),
+    action: z.optional(z.enum(['open', 'voucher', 'topUp', 'close'])),
     additionalAmount: z.optional(z.string()),
     channelId: z.optional(z.string()),
     cumulativeAmount: z.optional(z.string()),
     depositAmount: z.optional(z.string()),
-    openTx: z.optional(z.string()),
-    sequence: z.optional(z.number()),
-    topupTx: z.optional(z.string()),
 });
 
 export type SessionContext = z.infer<typeof sessionContextSchema>;
 
 export function session(parameters: session.Parameters) {
-    const { signer, authorizer, autoOpen = true, autoTopup = false, settleOnLimitHit = false, onProgress } = parameters;
+    const { authorizer, autoOpen = true, autoTopup = false, settleOnLimitHit = false, onProgress } = parameters;
 
     let activeChannel: ActiveChannel | null = null;
 
@@ -68,34 +52,33 @@ export function session(parameters: session.Parameters) {
         async createCredential({ challenge, context }) {
             const request = challenge.request as SessionChallengeRequest;
             const recipient = request.recipient;
-            const network = request.network ?? 'mainnet-beta';
-            const asset = request.asset;
-            const channelProgram = request.channelProgram;
-            const pricing = request.pricing;
-            const sessionDefaults = request.sessionDefaults;
+            const network = request.methodDetails.network ?? 'mainnet-beta';
+            const channelProgram = request.methodDetails.channelProgram;
+            const currency = request.currency;
+            const amount = request.amount;
+            const feePayerKey = request.methodDetails.feePayerKey;
 
             onProgress?.({
-                asset,
+                currency,
                 network,
                 recipient,
                 type: 'challenge',
             });
 
-            if (context?.action === 'topup') {
-                return await handleTopupAction(challenge, context, authorizer, activeChannel, channelProgram, network);
-            }
-
-            if (context?.action === 'close') {
-                const credential = await handleCloseAction(
+            if (context?.action === 'topUp') {
+                return await handleTopUpAction(
                     challenge,
                     context,
                     authorizer,
                     activeChannel,
                     channelProgram,
-                    recipient,
                     network,
-                    onProgress,
+                    feePayerKey,
                 );
+            }
+
+            if (context?.action === 'close') {
+                const credential = await handleCloseAction(challenge, context, authorizer, activeChannel, onProgress);
 
                 activeChannel = null;
                 return credential;
@@ -113,57 +96,42 @@ export function session(parameters: session.Parameters) {
                 const channelId = context.channelId;
                 const depositAmount = context.depositAmount;
                 const parsedDepositAmount = parseNonNegativeAmount(depositAmount, 'context.depositAmount');
-                const serverNonce = crypto.randomUUID();
 
                 onProgress?.({ channelId, type: 'opening' });
 
                 const openResult = await authorizer.authorizeOpen({
-                    asset,
                     channelId,
                     channelProgram,
+                    currency,
+                    decimals: request.methodDetails.decimals ?? 9,
                     depositAmount,
+                    feePayerKey,
                     network,
-                    pricing,
                     recipient,
-                    serverNonce,
                 });
 
-                const payer = resolveOpenPayer(openResult.voucher.voucher.payer, signer);
+                const payer = openResult.voucher.signer;
 
                 const payload: SessionCredentialPayload = {
                     action: 'open',
-                    authorizationMode: authorizer.getMode(),
                     channelId,
                     depositAmount,
-                    openTx: context.openTx ?? openResult.openTx,
                     payer,
-                    ...(openResult.expiresAt ? { expiresAt: openResult.expiresAt } : {}),
-                    capabilities: {
-                        ...(openResult.capabilities.maxCumulativeAmount
-                            ? {
-                                  maxCumulativeAmount: openResult.capabilities.maxCumulativeAmount,
-                              }
-                            : {}),
-                        ...(openResult.capabilities.allowedActions
-                            ? { allowedActions: openResult.capabilities.allowedActions }
-                            : {}),
-                    },
+                    transaction: openResult.transaction,
                     voucher: openResult.voucher,
                 };
 
                 activeChannel = {
-                    asset: normalizeAsset(asset),
                     channelId,
                     channelProgram,
                     cumulativeAmount: parseNonNegativeAmount(
                         openResult.voucher.voucher.cumulativeAmount,
                         'voucher.cumulativeAmount',
                     ),
+                    currency,
                     depositAmount: parsedDepositAmount,
                     network,
                     recipient,
-                    sequence: assertNonNegativeSequence(openResult.voucher.voucher.sequence),
-                    serverNonce: openResult.voucher.voucher.serverNonce,
                 };
 
                 onProgress?.({ channelId, type: 'opened' });
@@ -174,65 +142,51 @@ export function session(parameters: session.Parameters) {
                 });
             }
 
-            if (context?.action === 'update') {
+            if (context?.action === 'voucher') {
                 const channelId = context.channelId ?? activeChannel?.channelId;
                 if (!channelId) {
-                    throw new Error('channelId is required for update action');
+                    throw new Error('channelId is required for voucher action');
                 }
 
                 if (!activeChannel || activeChannel.channelId !== channelId) {
-                    throw new Error('Cannot update a channel that is not active');
+                    throw new Error('Cannot submit voucher for a channel that is not active');
                 }
 
                 if (!context.cumulativeAmount) {
-                    throw new Error('cumulativeAmount is required for update action');
-                }
-
-                if (context.sequence === undefined) {
-                    throw new Error('sequence is required for update action');
+                    throw new Error('cumulativeAmount is required for voucher action');
                 }
 
                 const nextCumulativeAmount = parseNonNegativeAmount(
                     context.cumulativeAmount,
                     'context.cumulativeAmount',
                 );
-                const nextSequence = assertNonNegativeSequence(context.sequence);
 
                 onProgress?.({
                     channelId,
                     cumulativeAmount: nextCumulativeAmount.toString(),
-                    type: 'updating',
+                    type: 'voucher-submitting',
                 });
 
-                const updateResult = await authorizer.authorizeUpdate({
+                const voucherResult = await authorizer.authorizeVoucher({
                     channelId,
-                    channelProgram,
                     cumulativeAmount: nextCumulativeAmount.toString(),
-                    meter: pricing?.meter ?? 'session',
-                    network,
-                    recipient,
-                    sequence: nextSequence,
-                    serverNonce: activeChannel.serverNonce,
-                    units: pricing ? '1' : '0',
                 });
 
                 const payload: SessionCredentialPayload = {
-                    action: 'update',
+                    action: 'voucher',
                     channelId,
-                    voucher: updateResult.voucher,
+                    voucher: voucherResult.voucher,
                 };
 
                 activeChannel.cumulativeAmount = parseNonNegativeAmount(
-                    updateResult.voucher.voucher.cumulativeAmount,
+                    voucherResult.voucher.voucher.cumulativeAmount,
                     'voucher.cumulativeAmount',
                 );
-                activeChannel.sequence = assertNonNegativeSequence(updateResult.voucher.voucher.sequence);
-                activeChannel.serverNonce = updateResult.voucher.voucher.serverNonce;
 
                 onProgress?.({
                     channelId,
                     cumulativeAmount: activeChannel.cumulativeAmount.toString(),
-                    type: 'updated',
+                    type: 'voucher-accepted',
                 });
 
                 return Credential.serialize({
@@ -241,11 +195,12 @@ export function session(parameters: session.Parameters) {
                 });
             }
 
+            // Auto-flow: no explicit action in context. Determine what to do based on channel state.
             const scopedActiveChannel =
                 activeChannel &&
                 matchesScope(activeChannel, {
-                    asset,
                     channelProgram,
+                    currency,
                     network,
                     recipient,
                 })
@@ -258,59 +213,44 @@ export function session(parameters: session.Parameters) {
                 }
 
                 const channelId = crypto.randomUUID();
-                const serverNonce = crypto.randomUUID();
-                const depositAmount = sessionDefaults?.suggestedDeposit ?? '0';
-                const parsedDepositAmount = parseNonNegativeAmount(depositAmount, 'sessionDefaults.suggestedDeposit');
+                const depositAmount = request.suggestedDeposit ?? '0';
+                const parsedDepositAmount = parseNonNegativeAmount(depositAmount, 'suggestedDeposit');
 
                 onProgress?.({ channelId, type: 'opening' });
 
                 const openResult = await authorizer.authorizeOpen({
-                    asset,
                     channelId,
                     channelProgram,
+                    currency,
+                    decimals: request.methodDetails.decimals ?? 9,
                     depositAmount,
+                    feePayerKey,
                     network,
-                    pricing,
                     recipient,
-                    serverNonce,
                 });
 
-                const payer = resolveOpenPayer(openResult.voucher.voucher.payer, signer);
+                const payer = openResult.voucher.signer;
 
                 const payload: SessionCredentialPayload = {
                     action: 'open',
-                    authorizationMode: authorizer.getMode(),
                     channelId,
                     depositAmount,
-                    openTx: openResult.openTx,
                     payer,
-                    ...(openResult.expiresAt ? { expiresAt: openResult.expiresAt } : {}),
-                    capabilities: {
-                        ...(openResult.capabilities.maxCumulativeAmount
-                            ? {
-                                  maxCumulativeAmount: openResult.capabilities.maxCumulativeAmount,
-                              }
-                            : {}),
-                        ...(openResult.capabilities.allowedActions
-                            ? { allowedActions: openResult.capabilities.allowedActions }
-                            : {}),
-                    },
+                    transaction: openResult.transaction,
                     voucher: openResult.voucher,
                 };
 
                 activeChannel = {
-                    asset: normalizeAsset(asset),
                     channelId,
                     channelProgram,
                     cumulativeAmount: parseNonNegativeAmount(
                         openResult.voucher.voucher.cumulativeAmount,
                         'voucher.cumulativeAmount',
                     ),
+                    currency,
                     depositAmount: parsedDepositAmount,
                     network,
                     recipient,
-                    sequence: assertNonNegativeSequence(openResult.voucher.voucher.sequence),
-                    serverNonce: openResult.voucher.voucher.serverNonce,
                 };
 
                 onProgress?.({ channelId, type: 'opened' });
@@ -321,9 +261,9 @@ export function session(parameters: session.Parameters) {
                 });
             }
 
-            const debitIncrement = resolveDebitIncrement(pricing);
+            // Auto-voucher: increment cumulative amount by the per-unit price.
+            const debitIncrement = resolveDebitIncrement(amount, request.methodDetails.minVoucherDelta);
             const nextCumulativeAmount = scopedActiveChannel.cumulativeAmount + debitIncrement;
-            const nextSequence = scopedActiveChannel.sequence + 1;
 
             if (nextCumulativeAmount > scopedActiveChannel.depositAmount) {
                 if (!autoTopup) {
@@ -339,9 +279,6 @@ export function session(parameters: session.Parameters) {
                         },
                         authorizer,
                         scopedActiveChannel,
-                        channelProgram,
-                        recipient,
-                        network,
                         onProgress,
                     );
 
@@ -350,25 +287,26 @@ export function session(parameters: session.Parameters) {
                 }
 
                 const additionalAmount = resolveAutoTopupAmount(
-                    sessionDefaults?.suggestedDeposit,
+                    request.suggestedDeposit,
                     nextCumulativeAmount,
                     scopedActiveChannel.depositAmount,
                 );
 
-                const topupResult = await authorizer.authorizeTopup({
+                const topUpResult = await authorizer.authorizeTopUp({
                     additionalAmount: additionalAmount.toString(),
                     channelId: scopedActiveChannel.channelId,
                     channelProgram,
+                    feePayerKey,
                     network,
                 });
 
                 scopedActiveChannel.depositAmount += additionalAmount;
 
                 const payload: SessionCredentialPayload = {
-                    action: 'topup',
+                    action: 'topUp',
                     additionalAmount: additionalAmount.toString(),
                     channelId: scopedActiveChannel.channelId,
-                    topupTx: topupResult.topupTx,
+                    transaction: topUpResult.transaction,
                 };
 
                 return Credential.serialize({
@@ -380,38 +318,29 @@ export function session(parameters: session.Parameters) {
             onProgress?.({
                 channelId: scopedActiveChannel.channelId,
                 cumulativeAmount: nextCumulativeAmount.toString(),
-                type: 'updating',
+                type: 'voucher-submitting',
             });
 
-            const updateResult = await authorizer.authorizeUpdate({
+            const voucherResult = await authorizer.authorizeVoucher({
                 channelId: scopedActiveChannel.channelId,
-                channelProgram,
                 cumulativeAmount: nextCumulativeAmount.toString(),
-                meter: pricing?.meter ?? 'session',
-                network,
-                recipient,
-                sequence: nextSequence,
-                serverNonce: scopedActiveChannel.serverNonce,
-                units: pricing ? '1' : '0',
             });
 
             const payload: SessionCredentialPayload = {
-                action: 'update',
+                action: 'voucher',
                 channelId: scopedActiveChannel.channelId,
-                voucher: updateResult.voucher,
+                voucher: voucherResult.voucher,
             };
 
             scopedActiveChannel.cumulativeAmount = parseNonNegativeAmount(
-                updateResult.voucher.voucher.cumulativeAmount,
+                voucherResult.voucher.voucher.cumulativeAmount,
                 'voucher.cumulativeAmount',
             );
-            scopedActiveChannel.sequence = assertNonNegativeSequence(updateResult.voucher.voucher.sequence);
-            scopedActiveChannel.serverNonce = updateResult.voucher.voucher.serverNonce;
 
             onProgress?.({
                 channelId: scopedActiveChannel.channelId,
                 cumulativeAmount: scopedActiveChannel.cumulativeAmount.toString(),
-                type: 'updated',
+                type: 'voucher-accepted',
             });
 
             return Credential.serialize({
@@ -422,28 +351,30 @@ export function session(parameters: session.Parameters) {
     });
 }
 
-async function handleTopupAction(
+async function handleTopUpAction(
     challenge: Challenge.Challenge,
     context: SessionContext,
     authorizer: SessionAuthorizer,
     activeChannel: ActiveChannel | null,
     channelProgram: string,
     network: string,
+    feePayerKey?: string,
 ): Promise<string> {
     const channelId = context.channelId ?? activeChannel?.channelId;
     if (!channelId) {
-        throw new Error('channelId is required for topup action');
+        throw new Error('channelId is required for topUp action');
     }
     if (!context.additionalAmount) {
-        throw new Error('additionalAmount is required for topup action');
+        throw new Error('additionalAmount is required for topUp action');
     }
 
     const additionalAmount = parseNonNegativeAmount(context.additionalAmount, 'context.additionalAmount');
 
-    const topupResult = await authorizer.authorizeTopup({
+    const topUpResult = await authorizer.authorizeTopUp({
         additionalAmount: additionalAmount.toString(),
         channelId,
         channelProgram,
+        feePayerKey,
         network,
     });
 
@@ -452,10 +383,10 @@ async function handleTopupAction(
     }
 
     const payload: SessionCredentialPayload = {
-        action: 'topup',
+        action: 'topUp',
         additionalAmount: additionalAmount.toString(),
         channelId,
-        topupTx: topupResult.topupTx,
+        transaction: topUpResult.transaction,
     };
 
     return Credential.serialize({ challenge, payload });
@@ -466,9 +397,6 @@ async function handleCloseAction(
     context: SessionContext,
     authorizer: SessionAuthorizer,
     activeChannel: ActiveChannel | null,
-    channelProgram: string,
-    recipient: string,
-    network: string,
     onProgress?: session.Parameters['onProgress'],
 ): Promise<string> {
     const channelId = context.channelId ?? activeChannel?.channelId;
@@ -476,29 +404,17 @@ async function handleCloseAction(
         throw new Error('channelId is required for close action');
     }
 
-    if (!activeChannel || activeChannel.channelId !== channelId) {
-        throw new Error('Cannot close a channel that is not active');
-    }
-
-    const finalSequence = activeChannel.sequence + 1;
-
     onProgress?.({ channelId, type: 'closing' });
 
     const closeResult = await authorizer.authorizeClose({
         channelId,
-        channelProgram,
-        finalCumulativeAmount: activeChannel.cumulativeAmount.toString(),
-        network,
-        recipient,
-        sequence: finalSequence,
-        serverNonce: activeChannel.serverNonce,
+        finalCumulativeAmount: activeChannel?.cumulativeAmount.toString(),
     });
 
     const payload: SessionCredentialPayload = {
         action: 'close',
         channelId,
-        ...(closeResult.closeTx ? { closeTx: closeResult.closeTx } : {}),
-        voucher: closeResult.voucher,
+        ...(closeResult.voucher ? { voucher: closeResult.voucher } : {}),
     };
 
     onProgress?.({ channelId, type: 'closed' });
@@ -506,13 +422,13 @@ async function handleCloseAction(
     return Credential.serialize({ challenge, payload });
 }
 
-function resolveDebitIncrement(pricing?: SessionPricing): bigint {
-    if (pricing?.minDebit !== undefined) {
-        return parseNonNegativeAmount(pricing.minDebit, 'pricing.minDebit');
+function resolveDebitIncrement(amount: string, minVoucherDelta?: string): bigint {
+    if (minVoucherDelta !== undefined) {
+        return parseNonNegativeAmount(minVoucherDelta, 'minVoucherDelta');
     }
 
-    if (pricing?.amountPerUnit !== undefined) {
-        return parseNonNegativeAmount(pricing.amountPerUnit, 'pricing.amountPerUnit');
+    if (amount !== undefined) {
+        return parseNonNegativeAmount(amount, 'amount');
     }
 
     return 0n;
@@ -532,58 +448,25 @@ function resolveAutoTopupAmount(
         return shortfall;
     }
 
-    const parsedSuggestedDeposit = parseNonNegativeAmount(suggestedDeposit, 'sessionDefaults.suggestedDeposit');
+    const parsedSuggestedDeposit = parseNonNegativeAmount(suggestedDeposit, 'suggestedDeposit');
     return parsedSuggestedDeposit > shortfall ? parsedSuggestedDeposit : shortfall;
 }
 
 function matchesScope(
     active: ActiveChannel,
     scope: {
-        asset: SessionAsset;
         channelProgram: string;
+        currency: string;
         network: string;
         recipient: string;
     },
 ): boolean {
-    if (active.recipient !== scope.recipient) {
-        return false;
-    }
-
-    if (active.network !== scope.network) {
-        return false;
-    }
-
-    if (active.channelProgram !== scope.channelProgram) {
-        return false;
-    }
-
-    return sameAsset(active.asset, scope.asset);
-}
-
-function sameAsset(left: SessionAsset, right: SessionAsset): boolean {
     return (
-        left.kind === right.kind &&
-        left.decimals === right.decimals &&
-        (left.mint ?? '') === (right.mint ?? '') &&
-        (left.symbol ?? '') === (right.symbol ?? '')
+        active.recipient === scope.recipient &&
+        active.network === scope.network &&
+        active.channelProgram === scope.channelProgram &&
+        active.currency === scope.currency
     );
-}
-
-function normalizeAsset(asset: SessionAsset): SessionAsset {
-    return {
-        decimals: asset.decimals,
-        kind: asset.kind,
-        ...(asset.mint ? { mint: asset.mint } : {}),
-        ...(asset.symbol ? { symbol: asset.symbol } : {}),
-    };
-}
-
-function assertNonNegativeSequence(value: number): number {
-    if (!Number.isInteger(value) || value < 0) {
-        throw new Error('voucher.sequence must be a non-negative integer');
-    }
-
-    return value;
 }
 
 function parseNonNegativeAmount(value: string, field: string): bigint {
@@ -601,14 +484,6 @@ function parseNonNegativeAmount(value: string, field: string): bigint {
     return amount;
 }
 
-function resolveOpenPayer(voucherPayer: string, signer?: TransactionSigner): string {
-    if (signer && signer.address !== voucherPayer) {
-        throw new Error(`Open voucher payer ${voucherPayer} does not match signer address ${signer.address}`);
-    }
-
-    return voucherPayer;
-}
-
 export declare namespace session {
     type Parameters = {
         authorizer: SessionAuthorizer;
@@ -620,11 +495,11 @@ export declare namespace session {
     };
 
     type ProgressEvent =
-        | { asset: SessionAsset; network: string; recipient: string; type: 'challenge' }
-        | { channelId: string; cumulativeAmount: string; type: 'updated' }
-        | { channelId: string; cumulativeAmount: string; type: 'updating' }
+        | { channelId: string; cumulativeAmount: string; type: 'voucher-accepted' }
+        | { channelId: string; cumulativeAmount: string; type: 'voucher-submitting' }
         | { channelId: string; type: 'closed' }
         | { channelId: string; type: 'closing' }
         | { channelId: string; type: 'opened' }
-        | { channelId: string; type: 'opening' };
+        | { channelId: string; type: 'opening' }
+        | { currency: string; network: string; recipient: string; type: 'challenge' };
 }

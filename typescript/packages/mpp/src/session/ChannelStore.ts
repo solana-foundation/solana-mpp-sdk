@@ -13,6 +13,24 @@ export interface ChannelStore {
     ): Promise<ChannelState | null>;
 }
 
+/**
+ * Create a ChannelStore backed by the given mppx Store.
+ *
+ * **Single-process safety only.** The per-channel lock implemented here uses
+ * an in-memory `Map`, which prevents concurrent races within a single Node.js
+ * process. It provides no protection when multiple server instances share the
+ * same backing store (e.g. a shared Redis or Upstash instance).
+ *
+ * For multi-instance deployments, you need a store adapter that supports
+ * atomic compare-and-swap semantics so that read-modify-write cycles on
+ * channel state are serializable across processes. Suitable approaches:
+ * - Redis `WATCH`/`MULTI`/`EXEC` (optimistic CAS)
+ * - Lua scripts executed atomically on the Redis server
+ * - A database with row-level locking and serializable transactions
+ *
+ * The lock here guards against TOCTOU within one process only. It does not
+ * substitute for distributed atomicity.
+ */
 export function fromStore(store: Store.Store): ChannelStore {
     const cached = storeCache.get(store);
     if (cached) {
@@ -87,21 +105,21 @@ export async function deductFromChannel(
             return null;
         }
 
-        const settledAmount = parseAtomicAmount(current.settledAmount, 'settledAmount');
-        const authorizedAmount = parseAtomicAmount(current.lastAuthorizedAmount, 'lastAuthorizedAmount');
+        const spentAmount = parseAtomicAmount(current.spentAmount, 'spentAmount');
+        const acceptedCumulative = parseAtomicAmount(current.acceptedCumulative, 'acceptedCumulative');
         const escrowedAmount = parseAtomicAmount(current.escrowedAmount, 'escrowedAmount');
 
-        const spendCeiling = authorizedAmount < escrowedAmount ? authorizedAmount : escrowedAmount;
-        const nextSettledAmount = settledAmount + amount;
+        const spendCeiling = acceptedCumulative < escrowedAmount ? acceptedCumulative : escrowedAmount;
+        const nextSpentAmount = spentAmount + amount;
 
-        if (nextSettledAmount > spendCeiling) {
+        if (nextSpentAmount > spendCeiling) {
             return current;
         }
 
         deducted = true;
         return {
             ...current,
-            settledAmount: nextSettledAmount.toString(),
+            spentAmount: nextSpentAmount.toString(),
         };
     });
 
