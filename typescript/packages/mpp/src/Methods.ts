@@ -29,7 +29,7 @@ export const charge = Method.from({
         request: z.object({
             /** Amount in smallest unit (lamports for SOL, base units for SPL tokens). */
             amount: z.string(),
-            /** Identifies the unit for amount. "SOL" for native, or token symbol/mint (e.g. "USDC"). */
+            /** Identifies the unit for amount. "sol" (lowercase) for native SOL, or the token mint address for SPL tokens. */
             currency: z.string(),
             /** Human-readable memo describing the resource or service being paid for. */
             description: z.optional(z.string()),

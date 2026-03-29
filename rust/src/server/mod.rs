@@ -149,7 +149,7 @@ impl Mpp {
             rpc: Arc::new(RpcClient::new(rpc_url)),
             realm,
             secret_key,
-            currency: config.currency,
+            currency: config.currency.to_lowercase(),
             recipient: config.recipient,
             decimals: config.decimals as u32,
             network: config.network,
@@ -404,8 +404,11 @@ impl Mpp {
             ));
         }
 
-        Ok(Receipt::success(METHOD_NAME, &signature_str)
-            .with_challenge_id(credential.challenge.id.clone()))
+        Ok(Receipt::success(
+            METHOD_NAME,
+            &signature_str,
+            credential.challenge.id.clone(),
+        ))
     }
 
     // ── Settlement ──
@@ -564,11 +567,17 @@ fn verify_transaction_pre_broadcast(
     request: &ChargeRequest,
     method_details: &MethodDetails,
 ) -> Result<(), VerificationError> {
+    let splits = method_details.splits.as_deref().unwrap_or(&[]);
+    if splits.len() > 8 {
+        return Err(VerificationError::too_many_splits(format!(
+            "Too many splits: {} (maximum 8)",
+            splits.len()
+        )));
+    }
+
     let total_amount: u64 = request.amount.parse().map_err(|_| {
         VerificationError::invalid_amount(format!("Invalid amount: {}", request.amount))
     })?;
-
-    let splits = method_details.splits.as_deref().unwrap_or(&[]);
     let splits_total: u64 = splits
         .iter()
         .filter_map(|s| s.amount.parse::<u64>().ok())
@@ -894,27 +903,48 @@ fn extract_parsed_instructions(
 // ── VerificationError ──
 
 /// Error returned when payment verification fails.
+///
+/// Includes RFC 9457 Problem Details fields for spec-compliant error responses.
 #[derive(Debug, Clone)]
 pub struct VerificationError {
     pub message: String,
     pub code: Option<&'static str>,
     pub retryable: bool,
+    /// RFC 9457 `type` URI identifying the error class.
+    pub type_uri: &'static str,
+    /// RFC 9457 short human-readable summary.
+    pub title: String,
+    /// RFC 9457 HTTP status code (402 for payment errors).
+    pub status: u16,
 }
 
 impl VerificationError {
     pub fn new(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
-            message: message.into(),
+            title: "Payment Verification Error".to_string(),
+            message,
             code: None,
             retryable: false,
+            type_uri: "tag:paymentauth.org,2024:verification-failed",
+            status: 402,
         }
     }
 
-    fn with_code(message: impl Into<String>, code: &'static str) -> Self {
+    fn with_code(
+        message: impl Into<String>,
+        code: &'static str,
+        title: &str,
+        type_uri: &'static str,
+    ) -> Self {
+        let message = message.into();
         Self {
-            message: message.into(),
+            title: title.to_string(),
+            message,
             code: Some(code),
             retryable: false,
+            type_uri,
+            status: 402,
         }
     }
 
@@ -924,39 +954,108 @@ impl VerificationError {
     }
 
     pub fn expired(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "payment-expired")
+        Self::with_code(
+            msg,
+            "payment-expired",
+            "Payment Challenge Expired",
+            "tag:paymentauth.org,2024:payment-expired",
+        )
     }
 
     pub fn invalid_amount(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "verification-failed")
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Verification Failed",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
     }
 
     pub fn invalid_recipient(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "verification-failed")
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Verification Failed",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
     }
 
     pub fn transaction_failed(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "verification-failed")
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Transaction Failed",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
     }
 
     pub fn not_found(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "verification-failed")
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Transaction Not Found",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
     }
 
     pub fn network_error(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "verification-failed").retryable()
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Network Error",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
+        .retryable()
     }
 
     pub fn credential_mismatch(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "malformed-credential")
+        Self::with_code(
+            msg,
+            "malformed-credential",
+            "Malformed Credential",
+            "tag:paymentauth.org,2024:malformed-credential",
+        )
     }
 
     pub fn invalid_payload(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "malformed-credential")
+        Self::with_code(
+            msg,
+            "malformed-credential",
+            "Invalid Payload",
+            "tag:paymentauth.org,2024:malformed-credential",
+        )
     }
 
     pub fn signature_consumed(msg: impl Into<String>) -> Self {
-        Self::with_code(msg, "signature-consumed")
+        Self::with_code(
+            msg,
+            "signature-consumed",
+            "Signature Already Consumed",
+            "tag:paymentauth.org,2024:signature-consumed",
+        )
+    }
+
+    pub fn too_many_splits(msg: impl Into<String>) -> Self {
+        Self::with_code(
+            msg,
+            "verification-failed",
+            "Too Many Splits",
+            "tag:paymentauth.org,2024:verification-failed",
+        )
+    }
+
+    /// Return an RFC 9457 Problem Details JSON object.
+    pub fn to_problem_json(&self) -> serde_json::Value {
+        let mut obj = serde_json::json!({
+            "type": self.type_uri,
+            "title": self.title,
+            "status": self.status,
+            "detail": self.message,
+        });
+        if let Some(code) = self.code {
+            obj["code"] = serde_json::Value::String(code.to_string());
+        }
+        obj
     }
 }
 
@@ -1435,7 +1534,7 @@ mod tests {
     fn new_valid_config_succeeds() {
         let mpp = test_mpp();
         assert_eq!(mpp.realm(), DEFAULT_REALM);
-        assert_eq!(mpp.currency(), "USDC");
+        assert_eq!(mpp.currency(), "usdc");
         assert_eq!(mpp.recipient(), TEST_RECIPIENT);
         assert_eq!(mpp.decimals(), 6);
     }
@@ -1520,7 +1619,7 @@ mod tests {
         // Decode the request and verify fields.
         let request: ChargeRequest = challenge.request.decode().unwrap();
         assert_eq!(request.amount, "100000"); // 0.10 * 10^6
-        assert_eq!(request.currency, "USDC");
+        assert_eq!(request.currency, "usdc");
         assert_eq!(request.recipient.as_deref(), Some(TEST_RECIPIENT));
     }
 
@@ -1531,7 +1630,7 @@ mod tests {
 
         let request: ChargeRequest = challenge.request.decode().unwrap();
         assert_eq!(request.amount, "1000000000"); // 1 SOL = 10^9 lamports
-        assert_eq!(request.currency, "SOL");
+        assert_eq!(request.currency, "sol");
     }
 
     #[test]
@@ -1909,7 +2008,7 @@ mod tests {
 
         let expected = ChargeRequest {
             amount: "100000".to_string(),
-            currency: "USDC".to_string(),
+            currency: "usdc".to_string(),
             recipient: Some(Pubkey::new_unique().to_string()), // different recipient
             ..Default::default()
         };
@@ -1951,25 +2050,19 @@ mod tests {
 
     #[test]
     fn receipt_success_format() {
-        let receipt = Receipt::success("solana", "5UfDuX123").with_challenge_id("challenge-id-abc");
+        let receipt = Receipt::success("solana", "5UfDuX123", "challenge-id-abc");
         assert!(receipt.is_success());
         assert_eq!(receipt.method.as_str(), "solana");
         assert_eq!(receipt.reference, "5UfDuX123");
-        assert_eq!(receipt.challenge_id.as_deref(), Some("challenge-id-abc"));
+        assert_eq!(receipt.challenge_id, "challenge-id-abc");
         assert!(!receipt.timestamp.is_empty());
         // Timestamp should be RFC 3339.
         assert!(receipt.timestamp.contains('T'));
     }
 
     #[test]
-    fn receipt_without_challenge_id() {
-        let receipt = Receipt::success("solana", "sig-abc");
-        assert!(receipt.challenge_id.is_none());
-    }
-
-    #[test]
     fn receipt_serializes_correctly() {
-        let receipt = Receipt::success("solana", "sig-abc").with_challenge_id("cid-123");
+        let receipt = Receipt::success("solana", "sig-abc", "cid-123");
         let json = serde_json::to_value(&receipt).unwrap();
         assert_eq!(json["status"], "success");
         assert_eq!(json["method"], "solana");

@@ -308,25 +308,24 @@ pub struct Receipt {
     pub method: MethodName,
     pub timestamp: String,
     pub reference: String,
-    #[serde(rename = "challengeId", skip_serializing_if = "Option::is_none")]
-    pub challenge_id: Option<String>,
+    #[serde(rename = "challengeId")]
+    pub challenge_id: String,
 }
 
 impl Receipt {
     /// Create a successful payment receipt.
-    pub fn success(method: impl Into<MethodName>, reference: impl Into<String>) -> Self {
+    pub fn success(
+        method: impl Into<MethodName>,
+        reference: impl Into<String>,
+        challenge_id: impl Into<String>,
+    ) -> Self {
         Self {
             status: ReceiptStatus::Success,
             method: method.into(),
             timestamp: now_iso8601(),
             reference: reference.into(),
-            challenge_id: None,
+            challenge_id: challenge_id.into(),
         }
-    }
-
-    pub fn with_challenge_id(mut self, id: impl Into<String>) -> Self {
-        self.challenge_id = Some(id.into());
-        self
     }
 
     pub fn is_success(&self) -> bool {
@@ -378,9 +377,10 @@ mod tests {
 
     #[test]
     fn receipt_creation() {
-        let receipt = Receipt::success("solana", "5UfDuX...");
+        let receipt = Receipt::success("solana", "5UfDuX...", "challenge-1");
         assert!(receipt.is_success());
         assert_eq!(receipt.method.as_str(), "solana");
+        assert_eq!(receipt.challenge_id, "challenge-1");
     }
 
     // ── with_secret_key_full coverage ──
@@ -697,15 +697,15 @@ mod tests {
 
     #[test]
     fn receipt_with_challenge_id() {
-        let receipt = Receipt::success("solana", "sig123").with_challenge_id("ch-456");
+        let receipt = Receipt::success("solana", "sig123", "ch-456");
         assert!(receipt.is_success());
-        assert_eq!(receipt.challenge_id.as_deref(), Some("ch-456"));
+        assert_eq!(receipt.challenge_id, "ch-456");
         assert_eq!(receipt.reference, "sig123");
     }
 
     #[test]
     fn receipt_timestamp_is_valid_rfc3339() {
-        let receipt = Receipt::success("solana", "ref");
+        let receipt = Receipt::success("solana", "ref", "ch-1");
         // Should parse as RFC3339
         let parsed = time::OffsetDateTime::parse(
             &receipt.timestamp,
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn receipt_to_header_roundtrip() {
-        let receipt = Receipt::success("solana", "tx-sig-abc");
+        let receipt = Receipt::success("solana", "tx-sig-abc", "ch-roundtrip");
         let header = receipt.to_header().unwrap();
         let parsed = super::super::parse_receipt(&header).unwrap();
         assert_eq!(parsed.reference, "tx-sig-abc");
