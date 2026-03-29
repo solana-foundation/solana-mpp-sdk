@@ -35,9 +35,17 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_json_canonicalizer = "0.3"
 bs58 = "0.5"
 base64 = "0.22"
 bincode = "1"
+
+# Crypto (HMAC challenge IDs)
+hmac = "0.12"
+sha2 = "0.10"
+
+# Time (expiration, timestamps)
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # Errors
 thiserror = "2"

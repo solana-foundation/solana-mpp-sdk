@@ -7,3 +7,7 @@ dist/
 target/
 Cargo.lock
 .surfpool
+.DS_Store
+.npm-pack/
+DUMP.md
+package/

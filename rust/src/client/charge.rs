@@ -10,11 +10,12 @@ use solana_transaction::Transaction;
 use std::str::FromStr;
 
 use crate::error::Error;
-use crate::protocol::methods::solana::{
-    programs, CredentialPayload, MppChallenge, MppRequest, SolanaMethodDetails, Split,
+use crate::protocol::core::{
+    format_authorization, parse_www_authenticate, PaymentChallenge, PaymentCredential,
 };
+use crate::protocol::solana::{programs, CredentialPayload, MethodDetails, Split};
 
-/// Build a charge transaction from the challenge parameters.
+/// Build a charge transaction from challenge parameters.
 ///
 /// Returns a `CredentialPayload::Transaction` with the signed (or
 /// partially signed) transaction ready to send to the server.
@@ -24,7 +25,7 @@ pub async fn build_charge_transaction(
     amount: &str,
     currency: &str,
     recipient: &str,
-    method_details: &SolanaMethodDetails,
+    method_details: &MethodDetails,
 ) -> Result<CredentialPayload, Error> {
     let total_amount: u64 = amount
         .parse()
@@ -103,7 +104,6 @@ pub async fn build_charge_transaction(
     let message = Message::new_with_blockhash(&instructions, Some(&actual_fee_payer), &blockhash);
     let mut tx = Transaction::new_unsigned(message);
 
-    // Sign the transaction message using keychain's signer.
     let sig_bytes = signer
         .sign_message(&tx.message_data())
         .await
@@ -126,107 +126,54 @@ pub async fn build_charge_transaction(
     })
 }
 
-/// Parse an MPP challenge from the `www-authenticate` header value.
+/// Build a credential from a challenge and return the `Authorization` header value.
 ///
-/// Supports the mppx format:
-/// ```text
-/// Payment id="...", realm="MPP Payment", method="solana", intent="charge", request="<base64url>"
-/// ```
-pub fn parse_www_authenticate(header_value: &str) -> Option<MppChallenge> {
-    if !header_value.starts_with("Payment ") || !header_value.contains("method=\"solana\"") {
-        return None;
-    }
-
-    let id = extract_quoted_param(header_value, "id")?;
-    let realm = extract_quoted_param(header_value, "realm").unwrap_or_default();
-    let method = extract_quoted_param(header_value, "method")?;
-    let intent = extract_quoted_param(header_value, "intent").unwrap_or_default();
-    let request_encoded = extract_quoted_param(header_value, "request")?;
-    let description = extract_quoted_param(header_value, "description");
-    let expires = extract_quoted_param(header_value, "expires");
-
-    use base64::Engine;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(&request_encoded)
-        .or_else(|_| {
-            let padded = pad_base64(&request_encoded);
-            base64::engine::general_purpose::STANDARD.decode(padded.as_bytes())
-        })
-        .ok()?;
-    let request: MppRequest = serde_json::from_slice(&decoded).ok()?;
-
-    Some(MppChallenge {
-        id,
-        realm,
-        method,
-        intent,
-        request_encoded,
-        description,
-        expires,
-        request,
-    })
-}
-
-/// Build a credential and return the `Authorization` header value.
-///
-/// Returns `"Payment <base64url(credential_json)>"`.
+/// Parses the challenge, builds and signs the transaction, and formats the
+/// credential as `"Payment <base64url(credential_json)>"`.
 pub async fn build_credential_header(
     signer: &dyn SolanaSigner,
     rpc: &RpcClient,
-    challenge: &MppChallenge,
+    challenge: &PaymentChallenge,
 ) -> Result<String, Error> {
-    let credential_payload = build_charge_transaction(
+    // Decode the request to get Solana-specific fields.
+    let request: crate::protocol::intents::ChargeRequest = challenge
+        .request
+        .decode()
+        .map_err(|e| Error::Other(format!("Failed to decode challenge request: {e}")))?;
+
+    let method_details: MethodDetails = request
+        .method_details
+        .as_ref()
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+        .map_err(|e| Error::Other(format!("Invalid method details: {e}")))?
+        .unwrap_or_default();
+
+    let recipient = request
+        .recipient
+        .as_deref()
+        .ok_or_else(|| Error::Other("No recipient in challenge".into()))?;
+
+    let payload = build_charge_transaction(
         signer,
         rpc,
-        &challenge.request.amount,
-        &challenge.request.currency,
-        &challenge.request.recipient,
-        &challenge.request.method_details,
+        &request.amount,
+        &request.currency,
+        recipient,
+        &method_details,
     )
     .await?;
 
-    let mut challenge_wire = serde_json::json!({
-        "id": challenge.id,
-        "realm": challenge.realm,
-        "method": challenge.method,
-        "intent": challenge.intent,
-        "request": challenge.request_encoded,
-    });
-    if let Some(desc) = &challenge.description {
-        challenge_wire["description"] = serde_json::json!(desc);
-    }
-    if let Some(exp) = &challenge.expires {
-        challenge_wire["expires"] = serde_json::json!(exp);
-    }
-
-    let credential = serde_json::json!({
-        "challenge": challenge_wire,
-        "payload": credential_payload,
-    });
-
-    use base64::Engine;
-    let json_str = serde_json::to_string(&credential)
-        .map_err(|e| Error::Other(format!("JSON serialization failed: {e}")))?;
-    let encoded =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json_str.as_bytes());
-    Ok(format!("Payment {encoded}"))
+    let credential = PaymentCredential::new(challenge.to_echo(), payload);
+    format_authorization(&credential)
+        .map_err(|e| Error::Other(format!("Failed to format credential: {e}")))
 }
 
-fn extract_quoted_param(header: &str, param: &str) -> Option<String> {
-    let prefix = format!("{param}=\"");
-    let start = header.find(&prefix)? + prefix.len();
-    let rest = &header[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn pad_base64(input: &str) -> String {
-    let rem = input.len() % 4;
-    if rem == 0 {
-        input.to_string()
-    } else {
-        format!("{}{}", input, "=".repeat(4 - rem))
-    }
+/// Parse a `WWW-Authenticate` header into a `PaymentChallenge`.
+///
+/// Convenience re-export — delegates to `protocol::core::parse_www_authenticate`.
+pub fn parse_challenge(header_value: &str) -> Result<PaymentChallenge, Error> {
+    parse_www_authenticate(header_value)
 }
 
 // ── Compute budget instructions (inline, no heavy dep) ──
@@ -291,13 +238,12 @@ fn build_spl_instructions(
     recipient: &Pubkey,
     rpc: &RpcClient,
     spl: &str,
-    method_details: &SolanaMethodDetails,
+    method_details: &MethodDetails,
     primary_amount: u64,
     splits: &[Split],
     fee_payer: Option<&Pubkey>,
 ) -> Result<(), Error> {
-    let mint =
-        Pubkey::from_str(spl).map_err(|e| Error::Other(format!("Invalid mint: {e}")))?;
+    let mint = Pubkey::from_str(spl).map_err(|e| Error::Other(format!("Invalid mint: {e}")))?;
     let token_program = resolve_token_program(rpc, &mint, method_details)?;
     let decimals = method_details.decimals.unwrap_or(6);
 
@@ -346,7 +292,7 @@ fn build_spl_instructions(
 fn resolve_token_program(
     rpc: &RpcClient,
     mint: &Pubkey,
-    method_details: &SolanaMethodDetails,
+    method_details: &MethodDetails,
 ) -> Result<Pubkey, Error> {
     let token_program = if let Some(token_program) = method_details.token_program.as_deref() {
         Pubkey::from_str(token_program)
@@ -369,14 +315,12 @@ fn resolve_token_program(
     Ok(token_program)
 }
 
-/// Derive the Associated Token Account address (PDA).
 fn get_associated_token_address(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
     let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
     let seeds = &[owner.as_ref(), token_program.as_ref(), mint.as_ref()];
     Pubkey::find_program_address(seeds, &ata_program).0
 }
 
-/// Build a CreateAssociatedTokenAccountIdempotent instruction manually.
 fn create_associated_token_account_idempotent(
     payer: &Pubkey,
     owner: &Pubkey,
@@ -401,7 +345,6 @@ fn create_associated_token_account_idempotent(
     }
 }
 
-/// Build a TransferChecked instruction manually.
 fn transfer_checked_ix(
     token_program: &Pubkey,
     source: &Pubkey,
@@ -430,7 +373,6 @@ fn transfer_checked_ix(
 /// Resolve a currency to an optional mint address.
 ///
 /// Returns `None` for native SOL, or `Some(mint_address)` for SPL tokens.
-/// Supports well-known symbols (USDC, PYUSD) and raw mint addresses.
 fn resolve_mint<'a>(currency: &'a str, network: Option<&str>) -> Option<&'a str> {
     match currency.to_uppercase().as_str() {
         "SOL" => None,
@@ -442,7 +384,6 @@ fn resolve_mint<'a>(currency: &'a str, network: Option<&str>) -> Option<&'a str>
             Some("devnet") => "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM",
             _ => "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
         }),
-        // If it's not a known symbol, assume it's already a mint address
         _ => Some(currency),
     }
 }
@@ -452,7 +393,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_mppx_www_authenticate() {
+    fn parse_challenge_from_header() {
         use base64::Engine;
         let request_json = serde_json::json!({
             "amount": "10000",
@@ -470,64 +411,15 @@ mod tests {
             "Payment id=\"abc123\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"{b64}\""
         );
 
-        let parsed = parse_www_authenticate(&header).unwrap();
+        let parsed = parse_challenge(&header).unwrap();
         assert_eq!(parsed.id, "abc123");
         assert_eq!(parsed.realm, "MPP Payment");
-        assert_eq!(parsed.method, "solana");
-        assert_eq!(parsed.intent, "charge");
-        assert_eq!(parsed.request.amount, "10000");
-        assert_eq!(parsed.request.currency, "USDC");
-        assert_eq!(parsed.request.method_details.network.as_deref(), Some("devnet"));
-    }
+        assert_eq!(parsed.method.as_str(), "solana");
 
-    #[test]
-    fn parse_www_authenticate_with_description_and_expires() {
-        use base64::Engine;
-        let request_json = serde_json::json!({
-            "amount": "5000",
-            "currency": "SOL",
-            "recipient": "So11111111111111111111111111111111111111112",
-            "methodDetails": { "network": "localnet" }
-        });
-        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&request_json).unwrap());
-        let header = format!(
-            "Payment id=\"x\", realm=\"test\", method=\"solana\", intent=\"charge\", request=\"{b64}\", description=\"Weather data\", expires=\"2026-12-31T00:00:00Z\""
-        );
-
-        let parsed = parse_www_authenticate(&header).unwrap();
-        assert_eq!(parsed.description.as_deref(), Some("Weather data"));
-        assert_eq!(parsed.expires.as_deref(), Some("2026-12-31T00:00:00Z"));
-    }
-
-    #[test]
-    fn parse_non_payment_header() {
-        assert!(parse_www_authenticate("Bearer realm=\"api\"").is_none());
-    }
-
-    #[test]
-    fn parse_non_solana_method() {
-        assert!(
-            parse_www_authenticate("Payment id=\"x\", method=\"bitcoin\", request=\"abc\"")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn extract_param_works() {
-        let h = "Payment id=\"abc\", method=\"solana\", realm=\"test\"";
-        assert_eq!(extract_quoted_param(h, "id"), Some("abc".to_string()));
-        assert_eq!(extract_quoted_param(h, "method"), Some("solana".to_string()));
-        assert_eq!(extract_quoted_param(h, "realm"), Some("test".to_string()));
-        assert_eq!(extract_quoted_param(h, "missing"), None);
-    }
-
-    #[test]
-    fn pad_base64_works() {
-        assert_eq!(pad_base64("abc"), "abc=");
-        assert_eq!(pad_base64("ab"), "ab==");
-        assert_eq!(pad_base64("abcd"), "abcd");
-        assert_eq!(pad_base64("a"), "a===");
+        // Decode the request
+        let req: crate::protocol::intents::ChargeRequest = parsed.request.decode().unwrap();
+        assert_eq!(req.amount, "10000");
+        assert_eq!(req.currency, "USDC");
     }
 
     #[test]

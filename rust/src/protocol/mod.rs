@@ -1,1 +1,3 @@
-pub mod methods;
+pub mod core;
+pub mod intents;
+pub mod solana;

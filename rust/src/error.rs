@@ -46,6 +46,18 @@ pub enum Error {
     #[error("Splits exceed maximum of 8 entries")]
     TooManySplits,
 
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+
+    #[error("Challenge expired at {0}")]
+    ChallengeExpired(String),
+
+    #[error("Challenge ID mismatch — not issued by this server")]
+    ChallengeMismatch,
+
     #[error("{0}")]
     Other(String),
 }
+
+/// Result type alias.
+pub type Result<T> = std::result::Result<T, Error>;
