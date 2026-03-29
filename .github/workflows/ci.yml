@@ -225,7 +225,7 @@ jobs:
           fi
         working-directory: .
 
-      # Fetch the reusable actions
+      # Fetch the reusable action
       - uses: actions/checkout@v4
         with:
           repository: solana-foundation/surfpool
@@ -233,19 +233,14 @@ jobs:
           sparse-checkout: .github/actions
           path: _surfpool
 
-      # Post coverage comment
-      - name: Post coverage
-        uses: ./_surfpool/.github/actions/coverage
+      # Post unified coverage + report comment
+      - name: Post test report
+        if: always()
+        uses: ./_surfpool/.github/actions/test-report
         with:
           ts-coverage-json: ts-cov/coverage-summary.json
           rust-coverage-json: rust-cov/coverage.json
-
-      # Publish Surfpool report
-      - name: Publish report
-        if: always()
-        uses: ./_surfpool/.github/actions/report
-        with:
-          output-path: surfpool-report.html
+          report-path: surfpool-report.html
 
   integration:
     name: Integration tests
