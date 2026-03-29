@@ -456,6 +456,11 @@ impl Mpp {
             tx.signatures[idx] = sig;
         }
 
+        // Verify the transaction instructions BEFORE broadcasting.
+        // This prevents the scenario where funds move but the server rejects
+        // the credential (wrong amount, wrong recipient, etc.).
+        verify_transaction_pre_broadcast(&tx, request, method_details)?;
+
         // Simulate before broadcasting (prevent fee loss).
         let sim = self
             .rpc
@@ -473,12 +478,7 @@ impl Mpp {
             .send_and_confirm_transaction(&tx)
             .map_err(|e| VerificationError::network_error(format!("Broadcast failed: {e}")))?;
 
-        let sig_str = signature.to_string();
-
-        // Verify on-chain.
-        self.verify_on_chain(&sig_str, request, method_details)?;
-
-        Ok(sig_str)
+        Ok(signature.to_string())
     }
 
     /// Push mode: fetch tx by signature, verify on-chain.
@@ -557,6 +557,169 @@ impl Mpp {
 
         Ok(())
     }
+}
+
+// ── Pre-broadcast verification ──
+//
+// Inspects the raw Transaction instructions to verify amounts and recipients
+// BEFORE broadcasting, preventing fund loss on invalid credentials.
+
+fn verify_transaction_pre_broadcast(
+    tx: &Transaction,
+    request: &ChargeRequest,
+    method_details: &MethodDetails,
+) -> Result<(), VerificationError> {
+    let total_amount: u64 = request.amount.parse().map_err(|_| {
+        VerificationError::invalid_amount(format!("Invalid amount: {}", request.amount))
+    })?;
+
+    let splits = method_details.splits.as_deref().unwrap_or(&[]);
+    let splits_total: u64 = splits
+        .iter()
+        .filter_map(|s| s.amount.parse::<u64>().ok())
+        .sum();
+    let primary_amount = total_amount
+        .checked_sub(splits_total)
+        .ok_or_else(|| VerificationError::invalid_amount("Split amounts exceed total amount"))?;
+    if primary_amount == 0 {
+        return Err(VerificationError::invalid_amount(
+            "Primary amount is zero after splits",
+        ));
+    }
+
+    let recipient = request
+        .recipient
+        .as_deref()
+        .ok_or_else(|| VerificationError::invalid_recipient("No recipient in charge request"))?;
+    let recipient_pk = Pubkey::from_str(recipient)
+        .map_err(|e| VerificationError::invalid_recipient(format!("Invalid recipient: {e}")))?;
+
+    let is_native_sol = request.currency.to_uppercase() == "SOL";
+    let account_keys = &tx.message.account_keys;
+
+    if is_native_sol {
+        verify_sol_transfer_instructions(tx, account_keys, &recipient_pk, primary_amount)?;
+        for split in splits {
+            let split_pk = Pubkey::from_str(&split.recipient).map_err(|e| {
+                VerificationError::invalid_recipient(format!("Invalid split recipient: {e}"))
+            })?;
+            let amt: u64 = split
+                .amount
+                .parse()
+                .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
+            verify_sol_transfer_instructions(tx, account_keys, &split_pk, amt)?;
+        }
+    } else {
+        verify_spl_transfer_instructions(tx, account_keys, &recipient_pk, primary_amount)?;
+        for split in splits {
+            let split_pk = Pubkey::from_str(&split.recipient).map_err(|e| {
+                VerificationError::invalid_recipient(format!("Invalid split recipient: {e}"))
+            })?;
+            let amt: u64 = split
+                .amount
+                .parse()
+                .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
+            verify_spl_transfer_instructions(tx, account_keys, &split_pk, amt)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Check that the transaction contains a System Program transfer of `amount` to `recipient`.
+fn verify_sol_transfer_instructions(
+    tx: &Transaction,
+    account_keys: &[Pubkey],
+    recipient: &Pubkey,
+    amount: u64,
+) -> Result<(), VerificationError> {
+    let system_program = Pubkey::from_str(programs::SYSTEM_PROGRAM).unwrap();
+
+    for ix in &tx.message.instructions {
+        let program_id = account_keys
+            .get(ix.program_id_index as usize)
+            .ok_or_else(|| VerificationError::invalid_payload("Invalid program_id_index"))?;
+        if program_id != &system_program {
+            continue;
+        }
+        // System program Transfer instruction: 4 bytes type (2u32 LE) + 8 bytes amount (u64 LE)
+        if ix.data.len() < 12 {
+            continue;
+        }
+        let ix_type = u32::from_le_bytes(ix.data[0..4].try_into().unwrap());
+        if ix_type != 2 {
+            // 2 = Transfer
+            continue;
+        }
+        let ix_amount = u64::from_le_bytes(ix.data[4..12].try_into().unwrap());
+        // destination is account_keys[accounts[1]]
+        if ix.accounts.len() < 2 {
+            continue;
+        }
+        let dest = account_keys
+            .get(ix.accounts[1] as usize)
+            .ok_or_else(|| VerificationError::invalid_payload("Invalid destination index"))?;
+        if dest == recipient && ix_amount == amount {
+            return Ok(());
+        }
+    }
+    Err(VerificationError::invalid_amount(format!(
+        "No matching SOL transfer of {amount} lamports to {recipient}"
+    )))
+}
+
+/// Check that the transaction contains an SPL Token transferChecked of `amount` to `recipient`'s ATA.
+fn verify_spl_transfer_instructions(
+    tx: &Transaction,
+    account_keys: &[Pubkey],
+    recipient: &Pubkey,
+    amount: u64,
+) -> Result<(), VerificationError> {
+    let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+    let token_2022_program = Pubkey::from_str(programs::TOKEN_2022_PROGRAM).unwrap();
+    let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
+
+    for ix in &tx.message.instructions {
+        let program_id = account_keys
+            .get(ix.program_id_index as usize)
+            .ok_or_else(|| VerificationError::invalid_payload("Invalid program_id_index"))?;
+        if program_id != &token_program && program_id != &token_2022_program {
+            continue;
+        }
+        // SPL Token TransferChecked instruction:
+        //   data[0] = 12 (instruction type)
+        //   data[1..9] = amount (u64 LE)
+        //   data[9] = decimals (u8)
+        // Accounts: [source, mint, destination, authority, ...]
+        if ix.data.is_empty() || ix.data[0] != 12 {
+            continue;
+        }
+        if ix.data.len() < 10 || ix.accounts.len() < 4 {
+            continue;
+        }
+        let ix_amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        if ix_amount != amount {
+            continue;
+        }
+        // Verify the destination ATA belongs to the recipient
+        let dest_ata = account_keys
+            .get(ix.accounts[2] as usize)
+            .ok_or_else(|| VerificationError::invalid_payload("Invalid destination index"))?;
+        let mint = account_keys
+            .get(ix.accounts[1] as usize)
+            .ok_or_else(|| VerificationError::invalid_payload("Invalid mint index"))?;
+        // Derive expected ATA: PDA([owner, token_program, mint], ata_program)
+        let (expected_ata, _) = Pubkey::find_program_address(
+            &[recipient.as_ref(), program_id.as_ref(), mint.as_ref()],
+            &ata_program,
+        );
+        if dest_ata == &expected_ata {
+            return Ok(());
+        }
+    }
+    Err(VerificationError::invalid_amount(format!(
+        "No matching SPL transferChecked of {amount} to {recipient}"
+    )))
 }
 
 // ── On-chain verification helpers ──
@@ -841,5 +1004,334 @@ mod tests {
             mint,
             tp
         ));
+    }
+
+    // ── Helpers for building test transactions ──
+
+    use solana_hash::Hash;
+    use solana_instruction::{AccountMeta, Instruction};
+    use solana_message::Message;
+
+    fn system_program_id() -> Pubkey {
+        Pubkey::from_str(programs::SYSTEM_PROGRAM).unwrap()
+    }
+    fn token_program_id() -> Pubkey {
+        Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap()
+    }
+    fn ata_program_id() -> Pubkey {
+        Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap()
+    }
+
+    /// Build a raw System Program transfer instruction.
+    fn system_transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
+        let mut data = Vec::with_capacity(12);
+        data.extend_from_slice(&2u32.to_le_bytes()); // Transfer = 2
+        data.extend_from_slice(&lamports.to_le_bytes());
+        Instruction {
+            program_id: system_program_id(),
+            accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*to, false)],
+            data,
+        }
+    }
+
+    /// Build a raw SPL Token transferChecked instruction.
+    fn spl_transfer_checked_ix(
+        source: &Pubkey,
+        mint: &Pubkey,
+        destination: &Pubkey,
+        authority: &Pubkey,
+        amount: u64,
+        decimals: u8,
+    ) -> Instruction {
+        let mut data = Vec::with_capacity(10);
+        data.push(12); // TransferChecked = 12
+        data.extend_from_slice(&amount.to_le_bytes());
+        data.push(decimals);
+        Instruction {
+            program_id: token_program_id(),
+            accounts: vec![
+                AccountMeta::new(*source, false),
+                AccountMeta::new_readonly(*mint, false),
+                AccountMeta::new(*destination, false),
+                AccountMeta::new_readonly(*authority, true),
+            ],
+            data,
+        }
+    }
+
+    fn dummy_tx(instructions: Vec<Instruction>, payer: &Pubkey) -> Transaction {
+        let message = Message::new_with_blockhash(&instructions, Some(payer), &Hash::default());
+        Transaction {
+            signatures: vec![Signature::default(); message.header.num_required_signatures as usize],
+            message,
+        }
+    }
+
+    fn charge_request(amount: u64, currency: &str, recipient: &Pubkey) -> ChargeRequest {
+        ChargeRequest {
+            amount: amount.to_string(),
+            currency: currency.to_string(),
+            recipient: Some(recipient.to_string()),
+            ..Default::default()
+        }
+    }
+
+    // ── Pre-broadcast SOL verification tests ──
+
+    #[test]
+    fn sol_transfer_correct_amount_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let amount = 1_000_000u64;
+
+        let tx = dummy_tx(
+            vec![system_transfer_ix(&sender, &recipient, amount)],
+            &sender,
+        );
+        let request = charge_request(amount, "SOL", &recipient);
+        let method_details = MethodDetails::default();
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn sol_transfer_wrong_amount_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        let tx = dummy_tx(
+            vec![system_transfer_ix(&sender, &recipient, 1)], // 1 lamport
+            &sender,
+        );
+        let request = charge_request(1_000_000, "SOL", &recipient); // expects 1M
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No matching SOL transfer"));
+    }
+
+    #[test]
+    fn sol_transfer_wrong_recipient_rejected() {
+        let sender = Pubkey::new_unique();
+        let wrong_recipient = Pubkey::new_unique();
+        let real_recipient = Pubkey::new_unique();
+        let amount = 1_000_000u64;
+
+        let tx = dummy_tx(
+            vec![system_transfer_ix(&sender, &wrong_recipient, amount)],
+            &sender,
+        );
+        let request = charge_request(amount, "SOL", &real_recipient);
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No matching SOL transfer"));
+    }
+
+    #[test]
+    fn sol_transfer_no_transfer_instruction_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        // Empty transaction (no instructions)
+        let tx = dummy_tx(vec![], &sender);
+        let request = charge_request(1_000_000, "SOL", &recipient);
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No matching SOL transfer"));
+    }
+
+    #[test]
+    fn sol_transfer_among_other_instructions_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let amount = 500_000u64;
+
+        // Compute budget + transfer + another random instruction
+        let compute_budget_ix = Instruction {
+            program_id: Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
+            accounts: vec![],
+            data: vec![0; 5],
+        };
+
+        let tx = dummy_tx(
+            vec![
+                compute_budget_ix,
+                system_transfer_ix(&sender, &recipient, amount),
+            ],
+            &sender,
+        );
+        let request = charge_request(amount, "SOL", &recipient);
+        let method_details = MethodDetails::default();
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    // ── Pre-broadcast SPL verification tests ──
+
+    #[test]
+    fn spl_transfer_correct_amount_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let amount = 1_000_000u64; // 1 USDC
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![spl_transfer_checked_ix(
+                &source_ata,
+                &mint,
+                &dest_ata,
+                &sender,
+                amount,
+                6,
+            )],
+            &sender,
+        );
+        let request = charge_request(amount, "USDC", &recipient);
+        let method_details = MethodDetails::default();
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn spl_transfer_wrong_amount_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![spl_transfer_checked_ix(
+                &source_ata,
+                &mint,
+                &dest_ata,
+                &sender,
+                1, // wrong: 1 base unit
+                6,
+            )],
+            &sender,
+        );
+        let request = charge_request(1_000_000, "USDC", &recipient); // expects 1M
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No matching SPL transferChecked"));
+    }
+
+    #[test]
+    fn spl_transfer_wrong_recipient_rejected() {
+        let sender = Pubkey::new_unique();
+        let wrong_recipient = Pubkey::new_unique();
+        let real_recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let amount = 1_000_000u64;
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let wrong_dest_ata = derive_ata(&wrong_recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![spl_transfer_checked_ix(
+                &source_ata,
+                &mint,
+                &wrong_dest_ata,
+                &sender,
+                amount,
+                6,
+            )],
+            &sender,
+        );
+        let request = charge_request(amount, "USDC", &real_recipient);
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No matching SPL transferChecked"));
+    }
+
+    #[test]
+    fn spl_transfer_with_ata_creation_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let amount = 1_000_000u64;
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+
+        // Simulate: create_ata_idempotent + transfer_checked
+        let create_ata_ix = Instruction {
+            program_id: ata_program_id(),
+            accounts: vec![
+                AccountMeta::new(sender, true),
+                AccountMeta::new(dest_ata, false),
+                AccountMeta::new_readonly(recipient, false),
+                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(system_program_id(), false),
+                AccountMeta::new_readonly(tp, false),
+            ],
+            data: vec![1], // CreateIdempotent
+        };
+
+        let tx = dummy_tx(
+            vec![
+                create_ata_ix,
+                spl_transfer_checked_ix(&source_ata, &mint, &dest_ata, &sender, amount, 6),
+            ],
+            &sender,
+        );
+        let request = charge_request(amount, "USDC", &recipient);
+        let method_details = MethodDetails::default();
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn zero_primary_amount_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        let tx = dummy_tx(vec![], &sender);
+        let request = charge_request(0, "SOL", &recipient);
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(
+            err.message.contains("Primary amount is zero")
+                || err.message.contains("Invalid amount")
+        );
+    }
+
+    #[test]
+    fn missing_recipient_rejected() {
+        let sender = Pubkey::new_unique();
+        let tx = dummy_tx(vec![], &sender);
+        let request = ChargeRequest {
+            amount: "1000000".to_string(),
+            currency: "SOL".to_string(),
+            recipient: None,
+            ..Default::default()
+        };
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No recipient"));
+    }
+
+    fn derive_ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+        let ata_program = ata_program_id();
+        let (ata, _) = Pubkey::find_program_address(
+            &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+            &ata_program,
+        );
+        ata
     }
 }
