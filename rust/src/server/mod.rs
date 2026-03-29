@@ -1334,4 +1334,1163 @@ mod tests {
         );
         ata
     }
+
+    // ── Helper: create an Mpp instance for testing ──
+
+    const TEST_SECRET: &str = "test-secret-key-for-unit-tests";
+    const TEST_RECIPIENT: &str = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY";
+
+    fn test_mpp() -> Mpp {
+        Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some(TEST_SECRET.to_string()),
+            network: "devnet".to_string(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    fn test_mpp_sol() -> Mpp {
+        Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some(TEST_SECRET.to_string()),
+            currency: "SOL".to_string(),
+            decimals: 9,
+            network: "devnet".to_string(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    // ── Mpp::new() config validation tests ──
+
+    #[test]
+    fn new_missing_recipient_errors() {
+        let err = Mpp::new(Config {
+            recipient: String::new(),
+            secret_key: Some("key".to_string()),
+            ..Default::default()
+        })
+        .err()
+        .expect("should fail");
+        assert!(
+            err.to_string().contains("recipient is required"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn new_invalid_recipient_pubkey_errors() {
+        let err = Mpp::new(Config {
+            recipient: "not-a-valid-pubkey!!!".to_string(),
+            secret_key: Some("key".to_string()),
+            ..Default::default()
+        })
+        .err()
+        .expect("should fail");
+        assert!(
+            err.to_string().contains("Invalid recipient pubkey"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn new_missing_secret_key_without_env_errors() {
+        // Temporarily ensure the env var is not set.
+        let prev = std::env::var(SECRET_KEY_ENV_VAR).ok();
+        std::env::remove_var(SECRET_KEY_ENV_VAR);
+
+        let err = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: None,
+            ..Default::default()
+        })
+        .err()
+        .expect("should fail");
+        assert!(err.to_string().contains("MPP_SECRET_KEY"), "got: {err}");
+
+        // Restore.
+        if let Some(v) = prev {
+            std::env::set_var(SECRET_KEY_ENV_VAR, v);
+        }
+    }
+
+    #[test]
+    fn new_secret_key_from_env() {
+        let prev = std::env::var(SECRET_KEY_ENV_VAR).ok();
+        std::env::set_var(SECRET_KEY_ENV_VAR, "env-secret");
+
+        let result = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: None,
+            ..Default::default()
+        });
+
+        // Restore before asserting (so we don't leak state on failure).
+        if let Some(v) = prev {
+            std::env::set_var(SECRET_KEY_ENV_VAR, v);
+        } else {
+            std::env::remove_var(SECRET_KEY_ENV_VAR);
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_valid_config_succeeds() {
+        let mpp = test_mpp();
+        assert_eq!(mpp.realm(), DEFAULT_REALM);
+        assert_eq!(mpp.currency(), "USDC");
+        assert_eq!(mpp.recipient(), TEST_RECIPIENT);
+        assert_eq!(mpp.decimals(), 6);
+    }
+
+    #[test]
+    fn new_custom_realm() {
+        let mpp = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some("key".to_string()),
+            realm: Some("Custom Realm".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(mpp.realm(), "Custom Realm");
+    }
+
+    #[test]
+    fn new_custom_rpc_url() {
+        // Should not fail — just verifying it accepts a custom RPC URL.
+        let mpp = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some("key".to_string()),
+            rpc_url: Some("http://custom:8899".to_string()),
+            ..Default::default()
+        });
+        assert!(mpp.is_ok());
+    }
+
+    #[test]
+    fn new_custom_store() {
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let result = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some("key".to_string()),
+            store: Some(store),
+            ..Default::default()
+        });
+        assert!(result.is_ok());
+    }
+
+    // ── default_rpc_url tests ──
+
+    #[test]
+    fn default_rpc_url_devnet() {
+        assert_eq!(default_rpc_url("devnet"), "https://api.devnet.solana.com");
+    }
+
+    #[test]
+    fn default_rpc_url_localnet() {
+        assert_eq!(default_rpc_url("localnet"), "http://localhost:8899");
+    }
+
+    #[test]
+    fn default_rpc_url_mainnet() {
+        assert_eq!(
+            default_rpc_url("mainnet-beta"),
+            "https://api.mainnet-beta.solana.com"
+        );
+    }
+
+    #[test]
+    fn default_rpc_url_unknown_defaults_to_mainnet() {
+        assert_eq!(
+            default_rpc_url("anything"),
+            "https://api.mainnet-beta.solana.com"
+        );
+    }
+
+    // ── charge() and charge_with_options() tests ──
+
+    #[test]
+    fn charge_generates_valid_challenge() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("0.10").unwrap();
+
+        assert_eq!(challenge.realm, DEFAULT_REALM);
+        assert_eq!(challenge.method.as_str(), "solana");
+        assert_eq!(challenge.intent.as_str(), "charge");
+        assert!(!challenge.id.is_empty());
+        assert!(challenge.expires.is_some());
+
+        // Decode the request and verify fields.
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        assert_eq!(request.amount, "100000"); // 0.10 * 10^6
+        assert_eq!(request.currency, "USDC");
+        assert_eq!(request.recipient.as_deref(), Some(TEST_RECIPIENT));
+    }
+
+    #[test]
+    fn charge_sol_amount_conversion() {
+        let mpp = test_mpp_sol();
+        let challenge = mpp.charge("1.0").unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        assert_eq!(request.amount, "1000000000"); // 1 SOL = 10^9 lamports
+        assert_eq!(request.currency, "SOL");
+    }
+
+    #[test]
+    fn charge_integer_amount() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("5").unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        assert_eq!(request.amount, "5000000"); // 5 * 10^6
+    }
+
+    #[test]
+    fn charge_with_options_description() {
+        let mpp = test_mpp();
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    description: Some("Test payment"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(challenge.description.as_deref(), Some("Test payment"));
+    }
+
+    #[test]
+    fn charge_with_options_external_id() {
+        let mpp = test_mpp();
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    external_id: Some("order-123"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        assert_eq!(request.external_id.as_deref(), Some("order-123"));
+    }
+
+    #[test]
+    fn charge_with_options_custom_expiry() {
+        let mpp = test_mpp();
+        let custom_expires = crate::expires::minutes(30);
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    expires: Some(&custom_expires),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(challenge.expires.as_deref(), Some(custom_expires.as_str()));
+    }
+
+    #[test]
+    fn charge_invalid_amount_errors() {
+        let mpp = test_mpp();
+        let result = mpp.charge("not-a-number");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn charge_too_many_decimals_errors() {
+        let mpp = test_mpp();
+        // 6 decimals configured, but providing 7.
+        let result = mpp.charge("1.1234567");
+        assert!(result.is_err());
+    }
+
+    // ── charge_challenge() tests ──
+
+    #[test]
+    fn charge_challenge_from_request() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "500000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let challenge = mpp.charge_challenge(&request).unwrap();
+
+        assert_eq!(challenge.method.as_str(), "solana");
+        assert_eq!(challenge.intent.as_str(), "charge");
+        assert!(challenge.expires.is_some());
+
+        let decoded: ChargeRequest = challenge.request.decode().unwrap();
+        assert_eq!(decoded.amount, "500000");
+    }
+
+    #[test]
+    fn charge_challenge_with_options() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "500000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let custom_expires = crate::expires::minutes(10);
+        let challenge = mpp
+            .charge_challenge_with_options(&request, Some(&custom_expires), Some("Premium access"))
+            .unwrap();
+
+        assert_eq!(challenge.expires.as_deref(), Some(custom_expires.as_str()));
+        assert_eq!(challenge.description.as_deref(), Some("Premium access"));
+    }
+
+    // ── Challenge HMAC verification tests ──
+
+    #[test]
+    fn challenge_hmac_verifies_with_correct_secret() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("1.00").unwrap();
+        assert!(challenge.verify(TEST_SECRET));
+    }
+
+    #[test]
+    fn challenge_hmac_fails_with_wrong_secret() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("1.00").unwrap();
+        assert!(!challenge.verify("wrong-secret"));
+    }
+
+    #[test]
+    fn challenge_hmac_deterministic() {
+        // Two challenges with same parameters should have same ID
+        // (except for expires timestamp, which varies).
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let expires = "2099-01-01T00:00:00Z";
+        let c1 = mpp
+            .charge_challenge_with_options(&request, Some(expires), None)
+            .unwrap();
+        let c2 = mpp
+            .charge_challenge_with_options(&request, Some(expires), None)
+            .unwrap();
+        assert_eq!(c1.id, c2.id);
+    }
+
+    #[test]
+    fn challenge_hmac_different_amounts_different_ids() {
+        let mpp = test_mpp();
+        let expires = "2099-01-01T00:00:00Z";
+
+        let r1 = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let r2 = ChargeRequest {
+            amount: "200000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+
+        let c1 = mpp
+            .charge_challenge_with_options(&r1, Some(expires), None)
+            .unwrap();
+        let c2 = mpp
+            .charge_challenge_with_options(&r2, Some(expires), None)
+            .unwrap();
+        assert_ne!(c1.id, c2.id);
+    }
+
+    // ── verify() — HMAC mismatch, expiry, replay protection ──
+
+    fn build_credential(
+        mpp: &Mpp,
+        request: &ChargeRequest,
+        payload: serde_json::Value,
+    ) -> PaymentCredential {
+        let challenge = mpp.charge_challenge(request).unwrap();
+        PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload,
+        }
+    }
+
+    fn build_credential_with_expires(
+        mpp: &Mpp,
+        request: &ChargeRequest,
+        expires: &str,
+        payload: serde_json::Value,
+    ) -> PaymentCredential {
+        let challenge = mpp
+            .charge_challenge_with_options(request, Some(expires), None)
+            .unwrap();
+        PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_rejects_tampered_challenge_id() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let payload = serde_json::json!({"type": "signature", "signature": "fakesig"});
+        let mut cred = build_credential(&mpp, &request, payload);
+        cred.challenge.id = "tampered-id".to_string();
+
+        let err = mpp.verify(&cred, &request).await.unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+        assert!(err.message.contains("Challenge ID mismatch"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_rejects_expired_challenge() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        // Use an already-expired timestamp.
+        let expired = "2020-01-01T00:00:00Z";
+        let payload = serde_json::json!({"type": "signature", "signature": "fakesig"});
+        let cred = build_credential_with_expires(&mpp, &request, expired, payload);
+
+        let err = mpp.verify(&cred, &request).await.unwrap_err();
+        assert_eq!(err.code, Some("payment-expired"));
+        assert!(err.message.contains("expired"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_rejects_invalid_expires_format() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        let payload = serde_json::json!({"type": "signature", "signature": "fakesig"});
+        let mut cred = build_credential(&mpp, &request, payload);
+        // Manually set an invalid expires but recompute the HMAC to match.
+        let bad_expires = "not-a-date";
+        let new_id = compute_challenge_id(
+            TEST_SECRET,
+            &mpp.realm,
+            cred.challenge.method.as_str(),
+            cred.challenge.intent.as_str(),
+            cred.challenge.request.raw(),
+            Some(bad_expires),
+            None,
+            None,
+        );
+        cred.challenge.expires = Some(bad_expires.to_string());
+        cred.challenge.id = new_id;
+
+        let err = mpp.verify(&cred, &request).await.unwrap_err();
+        assert!(err.message.contains("Invalid expires timestamp"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_rejects_invalid_payload() {
+        let mpp = test_mpp();
+        let request = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+        // Payload missing the "type" tag needed for CredentialPayload deserialization.
+        let bad_payload = serde_json::json!({"foo": "bar"});
+        let cred =
+            build_credential_with_expires(&mpp, &request, "2099-01-01T00:00:00Z", bad_payload);
+
+        let err = mpp.verify(&cred, &request).await.unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+        assert!(err.message.contains("Invalid credential payload"));
+    }
+
+    // ── verify_credential() tests ──
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_credential_rejects_tampered_id() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("0.10").unwrap();
+        let mut cred = PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload: serde_json::json!({"type": "signature", "signature": "x"}),
+        };
+        cred.challenge.id = "bad".to_string();
+
+        let err = mpp.verify_credential(&cred).await.unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+    }
+
+    // ── verify_credential_with_expected() tests ──
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_credential_with_expected_amount_mismatch() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("0.10").unwrap();
+        let cred = PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload: serde_json::json!({"type": "signature", "signature": "x"}),
+        };
+
+        let expected = ChargeRequest {
+            amount: "999999".to_string(), // different from 100000
+            currency: "USDC".to_string(),
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+
+        let err = mpp
+            .verify_credential_with_expected(&cred, &expected)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+        assert!(err.message.contains("Amount mismatch"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_credential_with_expected_currency_mismatch() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("0.10").unwrap();
+        let cred = PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload: serde_json::json!({"type": "signature", "signature": "x"}),
+        };
+
+        let expected = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "SOL".to_string(), // mismatch: challenge has USDC
+            recipient: Some(TEST_RECIPIENT.to_string()),
+            ..Default::default()
+        };
+
+        let err = mpp
+            .verify_credential_with_expected(&cred, &expected)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+        assert!(err.message.contains("Currency mismatch"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_credential_with_expected_recipient_mismatch() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("0.10").unwrap();
+        let cred = PaymentCredential {
+            challenge: challenge.to_echo(),
+            source: None,
+            payload: serde_json::json!({"type": "signature", "signature": "x"}),
+        };
+
+        let expected = ChargeRequest {
+            amount: "100000".to_string(),
+            currency: "USDC".to_string(),
+            recipient: Some(Pubkey::new_unique().to_string()), // different recipient
+            ..Default::default()
+        };
+
+        let err = mpp
+            .verify_credential_with_expected(&cred, &expected)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, Some("malformed-credential"));
+        assert!(err.message.contains("Recipient mismatch"));
+    }
+
+    // ── Replay protection tests ──
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replay_protection_marks_and_detects_consumed() {
+        let store = Arc::new(MemoryStore::new());
+        let mpp = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some(TEST_SECRET.to_string()),
+            store: Some(store.clone()),
+            network: "devnet".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let key = "solana-charge:consumed:testsig123";
+        // Not consumed yet.
+        assert!(store.get(key).await.unwrap().is_none());
+
+        // Mark as consumed.
+        store.put(key, serde_json::json!(true)).await.unwrap();
+
+        // Now it should be detected.
+        assert!(store.get(key).await.unwrap().is_some());
+    }
+
+    // ── Receipt tests ──
+
+    #[test]
+    fn receipt_success_format() {
+        let receipt = Receipt::success("solana", "5UfDuX123").with_challenge_id("challenge-id-abc");
+        assert!(receipt.is_success());
+        assert_eq!(receipt.method.as_str(), "solana");
+        assert_eq!(receipt.reference, "5UfDuX123");
+        assert_eq!(receipt.challenge_id.as_deref(), Some("challenge-id-abc"));
+        assert!(!receipt.timestamp.is_empty());
+        // Timestamp should be RFC 3339.
+        assert!(receipt.timestamp.contains('T'));
+    }
+
+    #[test]
+    fn receipt_without_challenge_id() {
+        let receipt = Receipt::success("solana", "sig-abc");
+        assert!(receipt.challenge_id.is_none());
+    }
+
+    #[test]
+    fn receipt_serializes_correctly() {
+        let receipt = Receipt::success("solana", "sig-abc").with_challenge_id("cid-123");
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["status"], "success");
+        assert_eq!(json["method"], "solana");
+        assert_eq!(json["reference"], "sig-abc");
+        assert_eq!(json["challengeId"], "cid-123");
+    }
+
+    // ── VerificationError tests ──
+
+    #[test]
+    fn verification_error_new_has_no_code() {
+        let err = VerificationError::new("Something went wrong");
+        assert_eq!(err.message, "Something went wrong");
+        assert!(err.code.is_none());
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn verification_error_expired() {
+        let err = VerificationError::expired("expired at X");
+        assert_eq!(err.code, Some("payment-expired"));
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn verification_error_invalid_amount() {
+        let err = VerificationError::invalid_amount("bad amount");
+        assert_eq!(err.code, Some("verification-failed"));
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn verification_error_invalid_recipient() {
+        let err = VerificationError::invalid_recipient("wrong recipient");
+        assert_eq!(err.code, Some("verification-failed"));
+    }
+
+    #[test]
+    fn verification_error_transaction_failed() {
+        let err = VerificationError::transaction_failed("tx failed");
+        assert_eq!(err.code, Some("verification-failed"));
+    }
+
+    #[test]
+    fn verification_error_not_found() {
+        let err = VerificationError::not_found("tx not found");
+        assert_eq!(err.code, Some("verification-failed"));
+    }
+
+    #[test]
+    fn verification_error_network_error_is_retryable() {
+        let err = VerificationError::network_error("timeout");
+        assert_eq!(err.code, Some("verification-failed"));
+        assert!(err.retryable);
+    }
+
+    #[test]
+    fn verification_error_credential_mismatch() {
+        let err = VerificationError::credential_mismatch("id mismatch");
+        assert_eq!(err.code, Some("malformed-credential"));
+    }
+
+    #[test]
+    fn verification_error_invalid_payload() {
+        let err = VerificationError::invalid_payload("bad payload");
+        assert_eq!(err.code, Some("malformed-credential"));
+    }
+
+    #[test]
+    fn verification_error_signature_consumed() {
+        let err = VerificationError::signature_consumed("already used");
+        assert_eq!(err.code, Some("signature-consumed"));
+    }
+
+    #[test]
+    fn verification_error_display_with_code() {
+        let err = VerificationError::expired("at time X");
+        assert_eq!(format!("{err}"), "[payment-expired] at time X");
+    }
+
+    #[test]
+    fn verification_error_display_without_code() {
+        let err = VerificationError::new("generic");
+        assert_eq!(format!("{err}"), "generic");
+    }
+
+    #[test]
+    fn verification_error_is_std_error() {
+        let err = VerificationError::new("test");
+        let _: &dyn std::error::Error = &err;
+    }
+
+    // ── On-chain parsed-instruction helpers (find_sol_transfer, find_spl_transfer) ──
+
+    #[test]
+    fn find_sol_transfer_success() {
+        let instructions = vec![serde_json::json!({
+            "parsed": {
+                "type": "transfer",
+                "info": {
+                    "destination": "RecipientPubkey",
+                    "lamports": 1000000
+                }
+            }
+        })];
+        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_ok());
+    }
+
+    #[test]
+    fn find_sol_transfer_wrong_amount() {
+        let instructions = vec![serde_json::json!({
+            "parsed": {
+                "type": "transfer",
+                "info": {
+                    "destination": "RecipientPubkey",
+                    "lamports": 500000
+                }
+            }
+        })];
+        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+    }
+
+    #[test]
+    fn find_sol_transfer_wrong_recipient() {
+        let instructions = vec![serde_json::json!({
+            "parsed": {
+                "type": "transfer",
+                "info": {
+                    "destination": "WrongPubkey",
+                    "lamports": 1000000
+                }
+            }
+        })];
+        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+    }
+
+    #[test]
+    fn find_sol_transfer_empty_instructions() {
+        assert!(find_sol_transfer(&[], "RecipientPubkey", 1_000_000).is_err());
+    }
+
+    #[test]
+    fn find_sol_transfer_ignores_non_transfer_types() {
+        let instructions = vec![serde_json::json!({
+            "parsed": {
+                "type": "createAccount",
+                "info": {
+                    "destination": "RecipientPubkey",
+                    "lamports": 1000000
+                }
+            }
+        })];
+        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+    }
+
+    #[test]
+    fn verify_sol_transfers_with_splits() {
+        let primary_recipient = "PrimaryRecipient";
+        let split_recipient = "SplitRecipient";
+        let instructions = vec![
+            serde_json::json!({
+                "parsed": {
+                    "type": "transfer",
+                    "info": {
+                        "destination": primary_recipient,
+                        "lamports": 800000
+                    }
+                }
+            }),
+            serde_json::json!({
+                "parsed": {
+                    "type": "transfer",
+                    "info": {
+                        "destination": split_recipient,
+                        "lamports": 200000
+                    }
+                }
+            }),
+        ];
+
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "200000".to_string(),
+            memo: None,
+        }];
+
+        assert!(verify_sol_transfers(&instructions, primary_recipient, 800000, &splits).is_ok());
+    }
+
+    #[test]
+    fn verify_sol_transfers_missing_split() {
+        let instructions = vec![serde_json::json!({
+            "parsed": {
+                "type": "transfer",
+                "info": {
+                    "destination": "PrimaryRecipient",
+                    "lamports": 800000
+                }
+            }
+        })];
+
+        let splits = vec![Split {
+            recipient: "SplitRecipient".to_string(),
+            amount: "200000".to_string(),
+            memo: None,
+        }];
+
+        let err =
+            verify_sol_transfers(&instructions, "PrimaryRecipient", 800000, &splits).unwrap_err();
+        assert!(err.message.contains("Missing split transfer"));
+    }
+
+    // ── find_spl_transfer tests ──
+
+    #[test]
+    fn find_spl_transfer_success() {
+        let owner = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY";
+        let mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let tp = programs::TOKEN_PROGRAM;
+
+        // Derive expected ATA.
+        let owner_pk = Pubkey::from_str(owner).unwrap();
+        let mint_pk = Pubkey::from_str(mint).unwrap();
+        let tp_pk = Pubkey::from_str(tp).unwrap();
+        let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
+        let (dest_ata, _) = Pubkey::find_program_address(
+            &[owner_pk.as_ref(), tp_pk.as_ref(), mint_pk.as_ref()],
+            &ata_program,
+        );
+
+        let instructions = vec![serde_json::json!({
+            "programId": tp,
+            "parsed": {
+                "type": "transferChecked",
+                "info": {
+                    "destination": dest_ata.to_string(),
+                    "mint": mint,
+                    "tokenAmount": {
+                        "amount": "1000000"
+                    }
+                }
+            }
+        })];
+
+        assert!(find_spl_transfer(&instructions, owner, 1_000_000).is_ok());
+    }
+
+    #[test]
+    fn find_spl_transfer_wrong_program() {
+        let instructions = vec![serde_json::json!({
+            "programId": "WrongProgram111111111111111111111111111111",
+            "parsed": {
+                "type": "transferChecked",
+                "info": {
+                    "destination": "SomeAta",
+                    "mint": "SomeMint",
+                    "tokenAmount": {
+                        "amount": "1000000"
+                    }
+                }
+            }
+        })];
+        assert!(find_spl_transfer(&instructions, "SomeOwner", 1_000_000).is_err());
+    }
+
+    #[test]
+    fn find_spl_transfer_wrong_type() {
+        let instructions = vec![serde_json::json!({
+            "programId": programs::TOKEN_PROGRAM,
+            "parsed": {
+                "type": "transfer",
+                "info": {
+                    "destination": "SomeAta",
+                    "mint": "SomeMint",
+                    "tokenAmount": {
+                        "amount": "1000000"
+                    }
+                }
+            }
+        })];
+        assert!(find_spl_transfer(&instructions, "SomeOwner", 1_000_000).is_err());
+    }
+
+    // ── verify_ata_owner edge cases ──
+
+    #[test]
+    fn verify_ata_owner_invalid_owner_returns_false() {
+        assert!(!verify_ata_owner(
+            "abc",
+            "invalid!!!",
+            "mint",
+            programs::TOKEN_PROGRAM
+        ));
+    }
+
+    #[test]
+    fn verify_ata_owner_invalid_mint_returns_false() {
+        assert!(!verify_ata_owner(
+            "abc",
+            "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+            "invalid!!!",
+            programs::TOKEN_PROGRAM
+        ));
+    }
+
+    #[test]
+    fn verify_ata_owner_invalid_token_program_returns_false() {
+        assert!(!verify_ata_owner(
+            "abc",
+            "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "invalid!!!"
+        ));
+    }
+
+    // ── Pre-broadcast: splits tests ──
+
+    #[test]
+    fn sol_transfer_with_splits_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tx = dummy_tx(
+            vec![
+                system_transfer_ix(&sender, &recipient, primary_amount),
+                system_transfer_ix(&sender, &split_recipient, split_amount),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                memo: None,
+            }]),
+            ..Default::default()
+        };
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn splits_exceeding_total_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+
+        let tx = dummy_tx(vec![], &sender);
+        let request = charge_request(100, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: "200".to_string(), // exceeds total of 100
+                memo: None,
+            }]),
+            ..Default::default()
+        };
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("Split amounts exceed total amount"));
+    }
+
+    #[test]
+    fn splits_consuming_entire_amount_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+
+        let tx = dummy_tx(vec![], &sender);
+        let request = charge_request(1000, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: "1000".to_string(), // exactly equals total => primary = 0
+                memo: None,
+            }]),
+            ..Default::default()
+        };
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("Primary amount is zero"));
+    }
+
+    #[test]
+    fn invalid_amount_string_rejected() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        let tx = dummy_tx(vec![], &sender);
+        let request = ChargeRequest {
+            amount: "not-a-number".to_string(),
+            currency: "SOL".to_string(),
+            recipient: Some(recipient.to_string()),
+            ..Default::default()
+        };
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("Invalid amount"));
+    }
+
+    #[test]
+    fn invalid_recipient_pubkey_in_request_rejected() {
+        let sender = Pubkey::new_unique();
+        let tx = dummy_tx(
+            vec![system_transfer_ix(&sender, &Pubkey::new_unique(), 1000)],
+            &sender,
+        );
+        let request = ChargeRequest {
+            amount: "1000".to_string(),
+            currency: "SOL".to_string(),
+            recipient: Some("not-a-valid-pubkey!!!".to_string()),
+            ..Default::default()
+        };
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("Invalid recipient"));
+    }
+
+    // ── SPL with splits pre-broadcast ──
+
+    #[test]
+    fn spl_transfer_with_splits_passes() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+        let split_dest_ata = derive_ata(&split_recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![
+                spl_transfer_checked_ix(&source_ata, &mint, &dest_ata, &sender, primary_amount, 6),
+                spl_transfer_checked_ix(
+                    &source_ata,
+                    &mint,
+                    &split_dest_ata,
+                    &sender,
+                    split_amount,
+                    6,
+                ),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "USDC", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                memo: None,
+            }]),
+            ..Default::default()
+        };
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    // ── ChargeOptions fee_payer flag in method details ──
+
+    #[test]
+    fn charge_with_fee_payer_includes_method_details() {
+        let mpp = Mpp::new(Config {
+            recipient: TEST_RECIPIENT.to_string(),
+            secret_key: Some(TEST_SECRET.to_string()),
+            fee_payer: true,
+            network: "devnet".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        let challenge = mpp.charge("1.00").unwrap();
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+
+        let details: MethodDetails =
+            serde_json::from_value(request.method_details.unwrap()).unwrap();
+        assert_eq!(details.fee_payer, Some(true));
+    }
+
+    #[test]
+    fn charge_options_fee_payer_flag() {
+        let mpp = test_mpp();
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    fee_payer: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details: MethodDetails =
+            serde_json::from_value(request.method_details.unwrap()).unwrap();
+        assert_eq!(details.fee_payer, Some(true));
+    }
+
+    // ── Method details include network and decimals ──
+
+    #[test]
+    fn charge_method_details_contain_network_and_decimals() {
+        let mpp = test_mpp();
+        let challenge = mpp.charge("1.00").unwrap();
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details = request.method_details.unwrap();
+        assert_eq!(details["network"], "devnet");
+        assert_eq!(details["decimals"], 6);
+    }
 }

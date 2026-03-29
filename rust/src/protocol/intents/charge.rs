@@ -112,4 +112,176 @@ mod tests {
         let converted = req.with_base_units().unwrap();
         assert_eq!(converted.amount, "1500000");
     }
+
+    // ── parse_amount edge cases ──
+
+    #[test]
+    fn parse_amount_zero() {
+        let req = ChargeRequest {
+            amount: "0".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(req.parse_amount().unwrap(), 0u64);
+    }
+
+    #[test]
+    fn parse_amount_invalid() {
+        let req = ChargeRequest {
+            amount: "not_a_number".to_string(),
+            ..Default::default()
+        };
+        assert!(req.parse_amount().is_err());
+    }
+
+    #[test]
+    fn parse_amount_negative() {
+        let req = ChargeRequest {
+            amount: "-100".to_string(),
+            ..Default::default()
+        };
+        assert!(req.parse_amount().is_err());
+    }
+
+    #[test]
+    fn parse_amount_max_u64() {
+        let req = ChargeRequest {
+            amount: u64::MAX.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(req.parse_amount().unwrap(), u64::MAX);
+    }
+
+    // ── with_base_units edge cases ──
+
+    #[test]
+    fn with_base_units_no_decimals_is_noop() {
+        let req = ChargeRequest {
+            amount: "500".to_string(),
+            decimals: None,
+            ..Default::default()
+        };
+        let converted = req.with_base_units().unwrap();
+        assert_eq!(converted.amount, "500");
+    }
+
+    #[test]
+    fn with_base_units_zero_decimals() {
+        let req = ChargeRequest {
+            amount: "42".to_string(),
+            decimals: Some(0),
+            ..Default::default()
+        };
+        let converted = req.with_base_units().unwrap();
+        assert_eq!(converted.amount, "42");
+    }
+
+    #[test]
+    fn with_base_units_clears_decimals() {
+        let req = ChargeRequest {
+            amount: "1.0".to_string(),
+            decimals: Some(6),
+            ..Default::default()
+        };
+        let converted = req.with_base_units().unwrap();
+        assert_eq!(converted.amount, "1000000");
+        assert!(converted.decimals.is_none());
+    }
+
+    // ── validate_max_amount tests ──
+
+    #[test]
+    fn validate_max_amount_within_limit() {
+        let req = ChargeRequest {
+            amount: "500".to_string(),
+            ..Default::default()
+        };
+        assert!(req.validate_max_amount("1000").is_ok());
+    }
+
+    #[test]
+    fn validate_max_amount_at_limit() {
+        let req = ChargeRequest {
+            amount: "1000".to_string(),
+            ..Default::default()
+        };
+        assert!(req.validate_max_amount("1000").is_ok());
+    }
+
+    #[test]
+    fn validate_max_amount_exceeds() {
+        let req = ChargeRequest {
+            amount: "1001".to_string(),
+            ..Default::default()
+        };
+        let err = req.validate_max_amount("1000");
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn validate_max_amount_invalid_amount() {
+        let req = ChargeRequest {
+            amount: "abc".to_string(),
+            ..Default::default()
+        };
+        assert!(req.validate_max_amount("1000").is_err());
+    }
+
+    #[test]
+    fn validate_max_amount_invalid_max() {
+        let req = ChargeRequest {
+            amount: "100".to_string(),
+            ..Default::default()
+        };
+        assert!(req.validate_max_amount("not_a_number").is_err());
+    }
+
+    // ── serialization edge cases ──
+
+    #[test]
+    fn charge_request_deserialization() {
+        let json =
+            r#"{"amount":"5000","currency":"SOL","recipient":"Abc123","externalId":"ext-1"}"#;
+        let req: ChargeRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.amount, "5000");
+        assert_eq!(req.currency, "SOL");
+        assert_eq!(req.recipient.as_deref(), Some("Abc123"));
+        assert_eq!(req.external_id.as_deref(), Some("ext-1"));
+    }
+
+    #[test]
+    fn charge_request_omits_none_fields() {
+        let req = ChargeRequest {
+            amount: "100".to_string(),
+            currency: "SOL".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("recipient"));
+        assert!(!json.contains("description"));
+        assert!(!json.contains("externalId"));
+        assert!(!json.contains("methodDetails"));
+    }
+
+    #[test]
+    fn charge_request_decimals_not_serialized() {
+        // decimals is #[serde(skip)] so should not appear in JSON
+        let req = ChargeRequest {
+            amount: "100".to_string(),
+            currency: "SOL".to_string(),
+            decimals: Some(9),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("decimals"));
+    }
+
+    #[test]
+    fn charge_request_default() {
+        let req = ChargeRequest::default();
+        assert_eq!(req.amount, "");
+        assert_eq!(req.currency, "");
+        assert!(req.decimals.is_none());
+        assert!(req.recipient.is_none());
+    }
 }

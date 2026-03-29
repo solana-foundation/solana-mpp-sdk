@@ -263,4 +263,207 @@ mod tests {
         let decoded = b64.decode_value().unwrap();
         assert_eq!(decoded["amount"], "1000");
     }
+
+    // ── MethodName edge cases ──
+
+    #[test]
+    fn method_name_from_string() {
+        let m = MethodName::from("Bitcoin".to_string());
+        assert_eq!(m.as_str(), "bitcoin");
+    }
+
+    #[test]
+    fn method_name_display() {
+        let m = MethodName::new("solana");
+        assert_eq!(format!("{m}"), "solana");
+    }
+
+    #[test]
+    fn method_name_deref() {
+        let m = MethodName::new("solana");
+        // Deref to &str — can call str methods
+        assert!(m.starts_with("sol"));
+        assert_eq!(m.len(), 6);
+    }
+
+    #[test]
+    fn method_name_is_valid_empty() {
+        let m = MethodName::new("");
+        assert!(!m.is_valid());
+    }
+
+    #[test]
+    fn method_name_is_valid_with_numbers() {
+        // Numbers are not lowercase ASCII letters
+        let m = MethodName::new("sol123");
+        assert!(!m.is_valid());
+    }
+
+    #[test]
+    fn method_name_equality() {
+        let a = MethodName::new("solana");
+        let b = MethodName::new("SOLANA");
+        assert_eq!(a, b); // Both normalize to lowercase
+    }
+
+    #[test]
+    fn method_name_hash_consistency() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(MethodName::new("solana"));
+        assert!(set.contains(&MethodName::new("SOLANA")));
+    }
+
+    // ── IntentName edge cases ──
+
+    #[test]
+    fn intent_name_from_string() {
+        let i = IntentName::from("Charge".to_string());
+        assert_eq!(i.as_str(), "charge");
+    }
+
+    #[test]
+    fn intent_name_display() {
+        let i = IntentName::new("session");
+        assert_eq!(format!("{i}"), "session");
+    }
+
+    #[test]
+    fn intent_name_deref() {
+        let i = IntentName::new("charge");
+        assert!(i.starts_with("ch"));
+    }
+
+    #[test]
+    fn intent_name_is_charge_case_insensitive() {
+        let i = IntentName::new("CHARGE");
+        assert!(i.is_charge()); // stored as "charge", eq_ignore_ascii_case
+    }
+
+    #[test]
+    fn intent_name_is_session_case_insensitive() {
+        let i = IntentName::new("Session");
+        assert!(i.is_session());
+    }
+
+    #[test]
+    fn intent_name_neither_charge_nor_session() {
+        let i = IntentName::new("subscribe");
+        assert!(!i.is_charge());
+        assert!(!i.is_session());
+    }
+
+    // ── Base64UrlJson edge cases ──
+
+    #[test]
+    fn base64url_json_from_raw() {
+        let b = Base64UrlJson::from_raw("eyJhIjoxfQ");
+        assert_eq!(b.raw(), "eyJhIjoxfQ");
+        assert!(!b.is_empty());
+    }
+
+    #[test]
+    fn base64url_json_empty() {
+        let b = Base64UrlJson::default();
+        assert!(b.is_empty());
+        assert_eq!(b.raw(), "");
+    }
+
+    #[test]
+    fn base64url_json_from_typed() {
+        #[derive(Serialize)]
+        struct Req {
+            amount: String,
+        }
+        let req = Req {
+            amount: "500".to_string(),
+        };
+        let b = Base64UrlJson::from_typed(&req).unwrap();
+        assert!(!b.is_empty());
+
+        let decoded = b.decode_value().unwrap();
+        assert_eq!(decoded["amount"], "500");
+    }
+
+    #[test]
+    fn base64url_json_decode_typed() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Req {
+            amount: String,
+        }
+        let b = Base64UrlJson::from_value(&serde_json::json!({"amount": "123"})).unwrap();
+        let req: Req = b.decode().unwrap();
+        assert_eq!(
+            req,
+            Req {
+                amount: "123".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn base64url_json_decode_invalid_base64() {
+        let b = Base64UrlJson::from_raw("!!!invalid!!!");
+        assert!(b.decode_value().is_err());
+    }
+
+    #[test]
+    fn base64url_json_decode_valid_base64_invalid_json() {
+        // base64url of "not json"
+        let b = Base64UrlJson::from_raw(base64url_encode(b"not json"));
+        assert!(b.decode_value().is_err());
+    }
+
+    #[test]
+    fn base64url_json_serde_roundtrip() {
+        let original = Base64UrlJson::from_value(&serde_json::json!({"key": "val"})).unwrap();
+        let json_str = serde_json::to_string(&original).unwrap();
+        let deserialized: Base64UrlJson = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    // ── base64url_decode edge cases ──
+
+    #[test]
+    fn base64url_decode_empty() {
+        let decoded = base64url_decode("").unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn base64url_decode_strips_padding() {
+        // "hello" in standard base64 with padding: "aGVsbG8="
+        let decoded = base64url_decode("aGVsbG8=").unwrap();
+        assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn base64url_decode_converts_plus_and_slash() {
+        // Standard base64 uses + and /, URL-safe uses - and _
+        // Encode some data that would produce + or / in standard base64
+        let data = vec![0xfb, 0xff, 0xfe]; // produces +/characters in standard
+        let standard = base64::engine::general_purpose::STANDARD.encode(&data);
+        let decoded = base64url_decode(&standard).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn base64url_decode_invalid_chars() {
+        assert!(base64url_decode("@#$%^&").is_err());
+    }
+
+    // ── ReceiptStatus ──
+
+    #[test]
+    fn receipt_status_display() {
+        assert_eq!(format!("{}", ReceiptStatus::Success), "success");
+    }
+
+    #[test]
+    fn receipt_status_serde() {
+        let json = serde_json::to_string(&ReceiptStatus::Success).unwrap();
+        assert_eq!(json, "\"success\"");
+        let deserialized: ReceiptStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, ReceiptStatus::Success);
+    }
 }

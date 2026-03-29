@@ -354,4 +354,285 @@ mod tests {
         assert!(result.is_some());
         assert_eq!(result.unwrap(), "Payment eyJhYmMi");
     }
+
+    // ── parse_www_authenticate edge cases ──
+
+    #[test]
+    fn parse_rejects_empty_id() {
+        let header =
+            r#"Payment id="", realm="api", method="solana", intent="charge", request="e30""#;
+        let err = parse_www_authenticate(header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Empty 'id'"));
+    }
+
+    #[test]
+    fn parse_rejects_uppercase_method() {
+        let header =
+            r#"Payment id="x", realm="api", method="SOLANA", intent="charge", request="e30""#;
+        let err = parse_www_authenticate(header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Invalid method"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_method() {
+        let header = r#"Payment id="x", realm="api", method="", intent="charge", request="e30""#;
+        let err = parse_www_authenticate(header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Invalid method"));
+    }
+
+    #[test]
+    fn parse_rejects_missing_request() {
+        let header = r#"Payment id="x", realm="api", method="solana", intent="charge""#;
+        let err = parse_www_authenticate(header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Missing 'request'"));
+    }
+
+    #[test]
+    fn parse_rejects_missing_realm() {
+        let header = r#"Payment id="x", method="solana", intent="charge", request="e30""#;
+        let err = parse_www_authenticate(header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Missing 'realm'"));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_json_in_request() {
+        // base64url of "not json"
+        let bad_b64 = base64url_encode(b"not json");
+        let header = format!(
+            r#"Payment id="x", realm="api", method="solana", intent="charge", request="{bad_b64}""#
+        );
+        let err = parse_www_authenticate(&header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn parse_with_tab_after_scheme() {
+        // Tab instead of space after "Payment"
+        let header = "Payment\tid=\"x\", realm=\"api\", method=\"solana\", intent=\"charge\", request=\"e30\"";
+        let parsed = parse_www_authenticate(header);
+        assert!(parsed.is_ok());
+        assert_eq!(parsed.unwrap().id, "x");
+    }
+
+    #[test]
+    fn parse_rejects_no_space_after_scheme() {
+        let header = "Paymentid=\"x\"";
+        assert!(parse_www_authenticate(header).is_err());
+    }
+
+    #[test]
+    fn parse_preserves_optional_fields() {
+        let opaque_b64 = base64url_encode(b"{\"nonce\":\"abc\"}");
+        let header = format!(
+            r#"Payment id="x", realm="api", method="solana", intent="charge", request="e30", expires="2099-01-01T00:00:00Z", description="Test payment", digest="sha-256=abc", opaque="{opaque_b64}""#
+        );
+        let parsed = parse_www_authenticate(&header).unwrap();
+        assert_eq!(parsed.expires.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert_eq!(parsed.description.as_deref(), Some("Test payment"));
+        assert_eq!(parsed.digest.as_deref(), Some("sha-256=abc"));
+        assert!(parsed.opaque.is_some());
+        assert_eq!(parsed.opaque.unwrap().raw(), opaque_b64);
+    }
+
+    // ── parse_www_authenticate_all ──
+
+    #[test]
+    fn parse_all_filters_non_payment() {
+        let headers = vec![
+            "Bearer token123",
+            "Payment id=\"x\", realm=\"api\", method=\"solana\", intent=\"charge\", request=\"e30\"",
+            "Digest qop=auth",
+        ];
+        let results = parse_www_authenticate_all(headers);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+    }
+
+    #[test]
+    fn parse_all_empty() {
+        let results = parse_www_authenticate_all(Vec::<&str>::new());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn parse_all_multiple_payment_headers() {
+        let h1 =
+            "Payment id=\"a\", realm=\"r1\", method=\"solana\", intent=\"charge\", request=\"e30\"";
+        let h2 =
+            "Payment id=\"b\", realm=\"r2\", method=\"solana\", intent=\"charge\", request=\"e30\"";
+        let results = parse_www_authenticate_all(vec![h1, h2]);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap().id, "a");
+        assert_eq!(results[1].as_ref().unwrap().id, "b");
+    }
+
+    // ── format_www_authenticate edge cases ──
+
+    #[test]
+    fn format_with_all_optional_fields() {
+        let opaque = Base64UrlJson::from_value(&serde_json::json!({"n": 1})).unwrap();
+        let challenge = PaymentChallenge {
+            id: "id1".to_string(),
+            realm: "realm1".to_string(),
+            method: "solana".into(),
+            intent: "charge".into(),
+            request: Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+            expires: Some("2099-01-01T00:00:00Z".to_string()),
+            description: Some("Test".to_string()),
+            digest: Some("sha-256=xyz".to_string()),
+            opaque: Some(opaque),
+        };
+        let header = format_www_authenticate(&challenge).unwrap();
+        assert!(header.contains("expires="));
+        assert!(header.contains("description="));
+        assert!(header.contains("digest="));
+        assert!(header.contains("opaque="));
+    }
+
+    #[test]
+    fn format_www_authenticate_many_empty() {
+        let result = format_www_authenticate_many(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn format_www_authenticate_many_multiple() {
+        let c1 = test_challenge();
+        let mut c2 = test_challenge();
+        c2.id = "def456".to_string();
+        let result = format_www_authenticate_many(&[c1, c2]).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("abc123"));
+        assert!(result[1].contains("def456"));
+    }
+
+    // ── escape_quoted_value edge cases ──
+
+    #[test]
+    fn format_rejects_crlf_in_values() {
+        let mut challenge = test_challenge();
+        challenge.id = "bad\rid".to_string();
+        assert!(format_www_authenticate(&challenge).is_err());
+    }
+
+    #[test]
+    fn format_rejects_newline_in_values() {
+        let mut challenge = test_challenge();
+        challenge.realm = "bad\nrealm".to_string();
+        assert!(format_www_authenticate(&challenge).is_err());
+    }
+
+    #[test]
+    fn format_escapes_quotes_in_values() {
+        let mut challenge = test_challenge();
+        challenge.id = r#"id"with"quotes"#.to_string();
+        let header = format_www_authenticate(&challenge).unwrap();
+        assert!(header.contains(r#"id\"with\"quotes"#));
+        // Roundtrip should work
+        let parsed = parse_www_authenticate(&header).unwrap();
+        assert_eq!(parsed.id, r#"id"with"quotes"#);
+    }
+
+    #[test]
+    fn format_escapes_backslashes_in_values() {
+        let mut challenge = test_challenge();
+        challenge.id = r"id\with\backslash".to_string();
+        let header = format_www_authenticate(&challenge).unwrap();
+        let parsed = parse_www_authenticate(&header).unwrap();
+        assert_eq!(parsed.id, r"id\with\backslash");
+    }
+
+    // ── parse_authorization edge cases ──
+
+    #[test]
+    fn parse_authorization_rejects_non_payment() {
+        assert!(parse_authorization("Bearer abc123").is_err());
+    }
+
+    #[test]
+    fn parse_authorization_rejects_oversized_token() {
+        let huge = "a".repeat(MAX_TOKEN_LEN + 1);
+        let header = format!("Payment {huge}");
+        let err = parse_authorization(&header);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn parse_authorization_rejects_invalid_base64() {
+        assert!(parse_authorization("Payment @@@invalid@@@").is_err());
+    }
+
+    #[test]
+    fn parse_authorization_rejects_invalid_json() {
+        let bad = base64url_encode(b"not json");
+        let header = format!("Payment {bad}");
+        assert!(parse_authorization(&header).is_err());
+    }
+
+    // ── parse_receipt edge cases ──
+
+    #[test]
+    fn parse_receipt_rejects_oversized() {
+        let huge = "a".repeat(MAX_TOKEN_LEN + 1);
+        let err = parse_receipt(&huge);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn parse_receipt_rejects_invalid_json() {
+        let bad = base64url_encode(b"not json");
+        assert!(parse_receipt(&bad).is_err());
+    }
+
+    // ── extract_payment_scheme edge cases ──
+
+    #[test]
+    fn extract_payment_scheme_none_when_absent() {
+        assert!(extract_payment_scheme("Bearer token123").is_none());
+    }
+
+    #[test]
+    fn extract_payment_scheme_case_insensitive() {
+        let result = extract_payment_scheme("payment abc123");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn extract_payment_scheme_first_match() {
+        let header = "Payment aaa, Payment bbb";
+        let result = extract_payment_scheme(header);
+        assert_eq!(result, Some("Payment aaa"));
+    }
+
+    // ── parse_auth_params edge cases ──
+
+    #[test]
+    fn parse_params_unquoted_values() {
+        let header = "Payment id=abc123, realm=api, method=solana, intent=charge, request=e30";
+        let parsed = parse_www_authenticate(header).unwrap();
+        assert_eq!(parsed.id, "abc123");
+    }
+
+    #[test]
+    fn parse_params_extra_whitespace() {
+        let header = r#"Payment   id="x" ,  realm="api" ,  method="solana" ,  intent="charge" ,  request="e30""#;
+        let parsed = parse_www_authenticate(header).unwrap();
+        assert_eq!(parsed.id, "x");
+    }
+
+    #[test]
+    fn parse_params_key_without_value_skipped() {
+        // "badkey" has no = sign, should be skipped
+        let header = r#"Payment id="x", badkey, realm="api", method="solana", intent="charge", request="e30""#;
+        let parsed = parse_www_authenticate(header).unwrap();
+        assert_eq!(parsed.id, "x");
+    }
 }

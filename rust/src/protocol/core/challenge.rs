@@ -382,4 +382,344 @@ mod tests {
         assert!(receipt.is_success());
         assert_eq!(receipt.method.as_str(), "solana");
     }
+
+    // ── with_secret_key_full coverage ──
+
+    #[test]
+    fn challenge_with_secret_key_full_verify() {
+        let request = Base64UrlJson::from_value(&serde_json::json!({"amount": "5000"})).unwrap();
+        let opaque = Base64UrlJson::from_value(&serde_json::json!({"session": "xyz"})).unwrap();
+        let challenge = PaymentChallenge::with_secret_key_full(
+            "my-secret",
+            "realm.example.com",
+            "solana",
+            "charge",
+            request,
+            Some("2099-01-01T00:00:00Z"),
+            Some("sha-256=abc123"),
+            Some("Pay for coffee"),
+            Some(opaque),
+        );
+        assert!(challenge.verify("my-secret"));
+        assert!(!challenge.verify("other-secret"));
+        assert_eq!(challenge.expires.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert_eq!(challenge.digest.as_deref(), Some("sha-256=abc123"));
+        assert_eq!(challenge.description.as_deref(), Some("Pay for coffee"));
+        assert!(challenge.opaque.is_some());
+    }
+
+    #[test]
+    fn challenge_with_secret_key_full_no_optionals() {
+        let request = Base64UrlJson::from_value(&serde_json::json!({"amount": "100"})).unwrap();
+        let challenge = PaymentChallenge::with_secret_key_full(
+            "secret", "realm", "solana", "charge", request, None, None, None, None,
+        );
+        assert!(challenge.verify("secret"));
+        assert!(challenge.expires.is_none());
+        assert!(challenge.digest.is_none());
+        assert!(challenge.description.is_none());
+        assert!(challenge.opaque.is_none());
+    }
+
+    // ── builder methods ──
+
+    #[test]
+    fn challenge_with_expires() {
+        let challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .with_expires("2099-12-31T23:59:59Z");
+        assert_eq!(challenge.expires.as_deref(), Some("2099-12-31T23:59:59Z"));
+    }
+
+    #[test]
+    fn challenge_with_description() {
+        let challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .with_description("A test payment");
+        assert_eq!(challenge.description.as_deref(), Some("A test payment"));
+    }
+
+    // ── is_expired tests ──
+
+    #[test]
+    fn challenge_not_expired_when_no_expires() {
+        let challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        );
+        assert!(!challenge.is_expired());
+    }
+
+    #[test]
+    fn challenge_expired_in_the_past() {
+        let challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .with_expires("2020-01-01T00:00:00Z");
+        assert!(challenge.is_expired());
+    }
+
+    #[test]
+    fn challenge_not_expired_in_the_future() {
+        let challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .with_expires("2099-01-01T00:00:00Z");
+        assert!(!challenge.is_expired());
+    }
+
+    #[test]
+    fn challenge_expired_with_invalid_timestamp() {
+        // Invalid timestamps should be treated as expired (fail-closed)
+        let mut challenge = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        );
+        challenge.expires = Some("not-a-date".to_string());
+        assert!(challenge.is_expired());
+    }
+
+    // ── to_echo preserves all fields ──
+
+    #[test]
+    fn to_echo_preserves_optional_fields() {
+        let opaque = Base64UrlJson::from_value(&serde_json::json!({"nonce": "abc"})).unwrap();
+        let mut challenge = PaymentChallenge::new(
+            "id-456",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({"x": 1})).unwrap(),
+        );
+        challenge.expires = Some("2099-01-01T00:00:00Z".to_string());
+        challenge.digest = Some("sha-256=deadbeef".to_string());
+        challenge.opaque = Some(opaque);
+
+        let echo = challenge.to_echo();
+        assert_eq!(echo.id, "id-456");
+        assert_eq!(echo.expires.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert_eq!(echo.digest.as_deref(), Some("sha-256=deadbeef"));
+        assert!(echo.opaque.is_some());
+    }
+
+    // ── to_header / from_header roundtrip ──
+
+    #[test]
+    fn challenge_to_header_from_header_roundtrip() {
+        let challenge = PaymentChallenge::new(
+            "round-trip-id",
+            "my-realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({"amount": "999"})).unwrap(),
+        );
+        let header = challenge.to_header().unwrap();
+        let parsed = PaymentChallenge::from_header(&header).unwrap();
+        assert_eq!(parsed.id, "round-trip-id");
+        assert_eq!(parsed.realm, "my-realm");
+        assert_eq!(parsed.method.as_str(), "solana");
+        assert_eq!(parsed.intent.as_str(), "charge");
+    }
+
+    // ── compute_challenge_id determinism ──
+
+    #[test]
+    fn compute_challenge_id_deterministic() {
+        let id1 = compute_challenge_id("key", "realm", "solana", "charge", "req", None, None, None);
+        let id2 = compute_challenge_id("key", "realm", "solana", "charge", "req", None, None, None);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn compute_challenge_id_changes_with_any_param() {
+        let base =
+            compute_challenge_id("key", "realm", "solana", "charge", "req", None, None, None);
+        let diff_key =
+            compute_challenge_id("key2", "realm", "solana", "charge", "req", None, None, None);
+        let diff_realm =
+            compute_challenge_id("key", "other", "solana", "charge", "req", None, None, None);
+        let diff_method =
+            compute_challenge_id("key", "realm", "bitcoin", "charge", "req", None, None, None);
+        let diff_intent =
+            compute_challenge_id("key", "realm", "solana", "session", "req", None, None, None);
+        let diff_request =
+            compute_challenge_id("key", "realm", "solana", "charge", "xyz", None, None, None);
+        let with_expires = compute_challenge_id(
+            "key",
+            "realm",
+            "solana",
+            "charge",
+            "req",
+            Some("2099-01-01T00:00:00Z"),
+            None,
+            None,
+        );
+        let with_digest = compute_challenge_id(
+            "key",
+            "realm",
+            "solana",
+            "charge",
+            "req",
+            None,
+            Some("sha-256=abc"),
+            None,
+        );
+        let with_opaque = compute_challenge_id(
+            "key",
+            "realm",
+            "solana",
+            "charge",
+            "req",
+            None,
+            None,
+            Some("opaque-data"),
+        );
+
+        assert_ne!(base, diff_key);
+        assert_ne!(base, diff_realm);
+        assert_ne!(base, diff_method);
+        assert_ne!(base, diff_intent);
+        assert_ne!(base, diff_request);
+        assert_ne!(base, with_expires);
+        assert_ne!(base, with_digest);
+        assert_ne!(base, with_opaque);
+    }
+
+    // ── constant_time_eq ──
+
+    #[test]
+    fn constant_time_eq_equal() {
+        assert!(constant_time_eq("hello", "hello"));
+        assert!(constant_time_eq("", ""));
+    }
+
+    #[test]
+    fn constant_time_eq_different_content() {
+        assert!(!constant_time_eq("hello", "world"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_length() {
+        assert!(!constant_time_eq("short", "longer-string"));
+    }
+
+    // ── PaymentCredential tests ──
+
+    #[test]
+    fn credential_new_and_payload_as() {
+        let echo = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .to_echo();
+        let payload = serde_json::json!({"type": "transaction", "transaction": "base64data"});
+        let credential = PaymentCredential::new(echo, payload.clone());
+        assert!(credential.source.is_none());
+        let decoded: serde_json::Value = credential.payload_as().unwrap();
+        assert_eq!(decoded["type"], "transaction");
+    }
+
+    #[test]
+    fn credential_with_source() {
+        let echo = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .to_echo();
+        let payload = serde_json::json!({"sig": "abc"});
+        let credential =
+            PaymentCredential::with_source(echo, "did:pkh:solana:mainnet:Abc123", payload);
+        assert_eq!(
+            credential.source.as_deref(),
+            Some("did:pkh:solana:mainnet:Abc123")
+        );
+    }
+
+    #[test]
+    fn credential_payload_as_wrong_type() {
+        let echo = PaymentChallenge::new(
+            "id",
+            "realm",
+            "solana",
+            "charge",
+            Base64UrlJson::from_value(&serde_json::json!({})).unwrap(),
+        )
+        .to_echo();
+        let credential = PaymentCredential::new(echo, serde_json::json!({"not": "a number"}));
+        // Try to deserialize as u64 — should fail
+        let result: Result<u64, _> = credential.payload_as();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn solana_did_format() {
+        let did = PaymentCredential::solana_did("mainnet", "Abc123XYZ");
+        assert_eq!(did, "did:pkh:solana:mainnet:Abc123XYZ");
+    }
+
+    #[test]
+    fn solana_did_devnet() {
+        let did = PaymentCredential::solana_did("devnet", "MyAddress");
+        assert_eq!(did, "did:pkh:solana:devnet:MyAddress");
+    }
+
+    // ── Receipt tests ──
+
+    #[test]
+    fn receipt_with_challenge_id() {
+        let receipt = Receipt::success("solana", "sig123").with_challenge_id("ch-456");
+        assert!(receipt.is_success());
+        assert_eq!(receipt.challenge_id.as_deref(), Some("ch-456"));
+        assert_eq!(receipt.reference, "sig123");
+    }
+
+    #[test]
+    fn receipt_timestamp_is_valid_rfc3339() {
+        let receipt = Receipt::success("solana", "ref");
+        // Should parse as RFC3339
+        let parsed = time::OffsetDateTime::parse(
+            &receipt.timestamp,
+            &time::format_description::well_known::Rfc3339,
+        );
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn receipt_to_header_roundtrip() {
+        let receipt = Receipt::success("solana", "tx-sig-abc");
+        let header = receipt.to_header().unwrap();
+        let parsed = super::super::parse_receipt(&header).unwrap();
+        assert_eq!(parsed.reference, "tx-sig-abc");
+        assert!(parsed.is_success());
+    }
 }

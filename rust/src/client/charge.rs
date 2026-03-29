@@ -443,4 +443,263 @@ mod tests {
             Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
         );
     }
+
+    // ── resolve_mint additional coverage ──
+
+    #[test]
+    fn resolve_mint_pyusd_mainnet() {
+        assert_eq!(
+            resolve_mint("PYUSD", None),
+            Some("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo")
+        );
+        assert_eq!(
+            resolve_mint("PYUSD", Some("mainnet")),
+            Some("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo")
+        );
+    }
+
+    #[test]
+    fn resolve_mint_pyusd_devnet() {
+        assert_eq!(
+            resolve_mint("PYUSD", Some("devnet")),
+            Some("CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM")
+        );
+    }
+
+    #[test]
+    fn resolve_mint_case_insensitive() {
+        // "usdc", "Usdc", "uSdC" all resolve the same
+        assert_eq!(
+            resolve_mint("usdc", None),
+            Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        );
+        assert_eq!(
+            resolve_mint("Usdc", Some("devnet")),
+            Some("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU")
+        );
+        assert_eq!(
+            resolve_mint("pyusd", None),
+            Some("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo")
+        );
+    }
+
+    #[test]
+    fn resolve_mint_unknown_token_returned_as_is() {
+        assert_eq!(resolve_mint("BONK", None), Some("BONK"));
+        assert_eq!(
+            resolve_mint("SomeRandomMint123", Some("devnet")),
+            Some("SomeRandomMint123")
+        );
+    }
+
+    // ── compute budget instruction tests ──
+
+    #[test]
+    fn compute_unit_price_ix_structure() {
+        let ix = compute_unit_price_ix(42);
+        let expected_program =
+            Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap();
+        assert_eq!(ix.program_id, expected_program);
+        assert!(ix.accounts.is_empty());
+        assert_eq!(ix.data[0], 3u8); // SetComputeUnitPrice discriminator
+        let price = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        assert_eq!(price, 42);
+    }
+
+    #[test]
+    fn compute_unit_price_ix_zero() {
+        let ix = compute_unit_price_ix(0);
+        let price = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        assert_eq!(price, 0);
+    }
+
+    #[test]
+    fn compute_unit_price_ix_max() {
+        let ix = compute_unit_price_ix(u64::MAX);
+        let price = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        assert_eq!(price, u64::MAX);
+    }
+
+    #[test]
+    fn compute_unit_limit_ix_structure() {
+        let ix = compute_unit_limit_ix(200_000);
+        let expected_program =
+            Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap();
+        assert_eq!(ix.program_id, expected_program);
+        assert!(ix.accounts.is_empty());
+        assert_eq!(ix.data[0], 2u8); // SetComputeUnitLimit discriminator
+        let units = u32::from_le_bytes(ix.data[1..5].try_into().unwrap());
+        assert_eq!(units, 200_000);
+    }
+
+    #[test]
+    fn compute_unit_limit_ix_zero() {
+        let ix = compute_unit_limit_ix(0);
+        let units = u32::from_le_bytes(ix.data[1..5].try_into().unwrap());
+        assert_eq!(units, 0);
+    }
+
+    // ── build_sol_instructions tests ──
+
+    #[test]
+    fn build_sol_instructions_no_splits() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let mut instructions = Vec::new();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000_000, &[]).unwrap();
+        assert_eq!(instructions.len(), 1);
+        // The system transfer instruction should use the system program
+        let system_program = Pubkey::from_str(programs::SYSTEM_PROGRAM).unwrap();
+        assert_eq!(instructions[0].program_id, system_program);
+    }
+
+    #[test]
+    fn build_sol_instructions_with_splits() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "500".to_string(),
+            memo: None,
+        }];
+        let mut instructions = Vec::new();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits).unwrap();
+        // 1 primary transfer + 1 split transfer
+        assert_eq!(instructions.len(), 2);
+    }
+
+    #[test]
+    fn build_sol_instructions_invalid_split_recipient() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let splits = vec![Split {
+            recipient: "not-a-pubkey!!!".to_string(),
+            amount: "500".to_string(),
+            memo: None,
+        }];
+        let mut instructions = Vec::new();
+        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits);
+        assert!(err.is_err());
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("Invalid split recipient"));
+    }
+
+    #[test]
+    fn build_sol_instructions_invalid_split_amount() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "not_a_number".to_string(),
+            memo: None,
+        }];
+        let mut instructions = Vec::new();
+        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits);
+        assert!(err.is_err());
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("Invalid split amount"));
+    }
+
+    // ── get_associated_token_address tests ──
+
+    #[test]
+    fn get_ata_deterministic() {
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+        let ata1 = get_associated_token_address(&owner, &mint, &token_program);
+        let ata2 = get_associated_token_address(&owner, &mint, &token_program);
+        assert_eq!(ata1, ata2);
+    }
+
+    #[test]
+    fn get_ata_different_for_different_owners() {
+        let owner1 = Pubkey::new_unique();
+        let owner2 = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+        let ata1 = get_associated_token_address(&owner1, &mint, &token_program);
+        let ata2 = get_associated_token_address(&owner2, &mint, &token_program);
+        assert_ne!(ata1, ata2);
+    }
+
+    #[test]
+    fn get_ata_different_for_different_token_programs() {
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let tp1 = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+        let tp2 = Pubkey::from_str(programs::TOKEN_2022_PROGRAM).unwrap();
+        let ata1 = get_associated_token_address(&owner, &mint, &tp1);
+        let ata2 = get_associated_token_address(&owner, &mint, &tp2);
+        assert_ne!(ata1, ata2);
+    }
+
+    // ── create_associated_token_account_idempotent tests ──
+
+    #[test]
+    fn create_ata_idempotent_instruction_structure() {
+        let payer = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+
+        let ix = create_associated_token_account_idempotent(&payer, &owner, &mint, &token_program);
+
+        let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
+        assert_eq!(ix.program_id, ata_program);
+        assert_eq!(ix.accounts.len(), 6);
+        assert_eq!(ix.data, vec![1]); // CreateIdempotent discriminator
+
+        // payer is signer and writable
+        assert_eq!(ix.accounts[0].pubkey, payer);
+        assert!(ix.accounts[0].is_signer);
+        assert!(ix.accounts[0].is_writable);
+
+        // owner is read-only
+        assert_eq!(ix.accounts[2].pubkey, owner);
+        assert!(!ix.accounts[2].is_signer);
+        assert!(!ix.accounts[2].is_writable);
+    }
+
+    // ── transfer_checked_ix tests ──
+
+    #[test]
+    fn transfer_checked_ix_structure() {
+        let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
+        let source = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let dest = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+
+        let ix = transfer_checked_ix(&token_program, &source, &mint, &dest, &authority, 42_000, 6);
+
+        assert_eq!(ix.program_id, token_program);
+        assert_eq!(ix.accounts.len(), 4);
+        assert_eq!(ix.data[0], 12u8); // TransferChecked discriminator
+        let amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        assert_eq!(amount, 42_000);
+        assert_eq!(ix.data[9], 6); // decimals
+
+        // source writable, mint read-only, dest writable, authority signer
+        assert!(ix.accounts[0].is_writable);
+        assert!(!ix.accounts[1].is_writable);
+        assert!(ix.accounts[2].is_writable);
+        assert!(ix.accounts[3].is_signer);
+    }
+
+    // ── parse_challenge error cases ──
+
+    #[test]
+    fn parse_challenge_rejects_non_payment_scheme() {
+        let err = parse_challenge("Bearer realm=\"test\"");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn parse_challenge_rejects_missing_fields() {
+        let err = parse_challenge("Payment id=\"abc\"");
+        assert!(err.is_err());
+    }
 }
