@@ -98,13 +98,8 @@ jobs:
           mkdir -p node_modules
           ln -sfn /tmp/surfpool/crates/sdk-node node_modules/surfpool-sdk
 
-      # Run unit tests with coverage
-      - run: pnpm test:coverage
-
-      # Run surfpool integration tests (merged into same coverage)
-      - name: Surfpool integration tests
-        run: pnpm test:surfpool
-        continue-on-error: true
+      # Run ALL tests (unit + surfpool integration) with coverage
+      - run: pnpm vitest run --coverage --config vitest.config.ci.ts
 
       - name: Upload TS coverage
         if: always()
@@ -163,50 +158,18 @@ jobs:
           path: rust-cov
         continue-on-error: true
 
-      - name: Build coverage comment
-        id: cov
-        run: |
-          # ── TypeScript ──
-          TS_STMTS="-" TS_BRANCH="-" TS_FUNC="-" TS_LINES="-"
-          if [ -f ts-cov/coverage-summary.json ]; then
-            TS_STMTS=$(jq -r '.total.statements.pct' ts-cov/coverage-summary.json)
-            TS_BRANCH=$(jq -r '.total.branches.pct' ts-cov/coverage-summary.json)
-            TS_FUNC=$(jq -r '.total.functions.pct' ts-cov/coverage-summary.json)
-            TS_LINES=$(jq -r '.total.lines.pct' ts-cov/coverage-summary.json)
-          fi
-
-          # ── Rust ──
-          RS_LINES="-" RS_FUNC="-" RS_REGIONS="-"
-          if [ -f rust-cov/coverage.json ]; then
-            RS_LINES=$(jq -r '[.data[0].totals.lines.percent] | .[0] | . * 10 | round / 10' rust-cov/coverage.json)
-            RS_FUNC=$(jq -r '[.data[0].totals.functions.percent] | .[0] | . * 10 | round / 10' rust-cov/coverage.json)
-            RS_REGIONS=$(jq -r '[.data[0].totals.regions.percent] | .[0] | . * 10 | round / 10' rust-cov/coverage.json)
-          fi
-
-          # ── Badge colors ──
-          badge() { if [ "$(echo "$1 >= 90" | bc -l)" = "1" ]; then echo "🟢"; elif [ "$(echo "$1 >= 80" | bc -l)" = "1" ]; then echo "🟡"; else echo "🔴"; fi; }
-
-          TS_BADGE=$(badge "$TS_LINES" 2>/dev/null || echo "⚪")
-          RS_BADGE=$(badge "$RS_LINES" 2>/dev/null || echo "⚪")
-
-          # ── Build comment ──
-          {
-            echo "body<<EOFCOMMENT"
-            echo "## Test Coverage"
-            echo ""
-            echo "| | Statements | Branches | Functions | Lines |"
-            echo "|---|---|---|---|---|"
-            echo "| ${TS_BADGE} **TypeScript** | ${TS_STMTS}% | ${TS_BRANCH}% | ${TS_FUNC}% | ${TS_LINES}% |"
-            echo "| ${RS_BADGE} **Rust** | ${RS_REGIONS}% | — | ${RS_FUNC}% | ${RS_LINES}% |"
-            echo "EOFCOMMENT"
-          } >> "$GITHUB_OUTPUT"
-        working-directory: .
+      - uses: actions/checkout@v4
+        with:
+          repository: solana-foundation/surfpool
+          ref: feat/sdk
+          sparse-checkout: .github/actions
+          path: _surfpool
 
       - name: Post coverage comment
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: ./_surfpool/.github/actions/coverage
         with:
-          header: coverage
-          message: ${{ steps.cov.outputs.body }}
+          ts-coverage-json: ts-cov/coverage-summary.json
+          rust-coverage-json: rust-cov/coverage.json
 
   integration:
     name: Integration tests
