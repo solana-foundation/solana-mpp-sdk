@@ -54,7 +54,7 @@ function makeChallenge(overrides: {
             amount,
             currency,
             methodDetails: {
-                network,
+                ...(network ? { network } : {}),
                 ...(isSpl ? { decimals: decimals ?? 6, tokenProgram: tokenProgram ?? TOKEN_PROGRAM } : {}),
                 ...(feePayer ? { feePayer: true, feePayerKey } : {}),
                 ...(recentBlockhash ? { recentBlockhash } : {}),
@@ -62,7 +62,7 @@ function makeChallenge(overrides: {
             },
             recipient,
         },
-    };
+    } as any;
 }
 
 /** Decode the base64 payload from a serialized credential string. */

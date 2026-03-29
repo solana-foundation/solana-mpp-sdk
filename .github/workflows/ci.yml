@@ -77,8 +77,35 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+
+      # TEMPORARY: Build surfpool-sdk-node native module for integration tests.
+      # This will be replaced with a published npm package once surfpool-sdk is released.
+      - name: Install Rust (for surfpool-sdk-node)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Clone and build surfpool-sdk-node
+        run: |
+          git clone --depth 1 --branch feat/sdk https://github.com/solana-foundation/surfpool.git /tmp/surfpool
+          cd /tmp/surfpool/crates/sdk-node
+          npm install
+          npx napi build --platform surfpool-sdk --dts internal.d.ts --js internal.js
+        working-directory: .
+
       - run: pnpm install --frozen-lockfile
+
+      # TEMPORARY: Link the locally-built surfpool-sdk-node into node_modules
+      - name: Link surfpool-sdk
+        run: |
+          mkdir -p node_modules
+          ln -sfn /tmp/surfpool/crates/sdk-node node_modules/surfpool-sdk
+
+      # Run unit tests with coverage
       - run: pnpm test:coverage
+
+      # Run surfpool integration tests (merged into same coverage)
+      - name: Surfpool integration tests
+        run: pnpm test:surfpool
+        continue-on-error: true
+
       - name: Upload TS coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -157,7 +184,7 @@ jobs:
           fi
 
           # ── Badge colors ──
-          badge() { if [ "$(echo "$1 >= 80" | bc -l)" = "1" ]; then echo "🟢"; elif [ "$(echo "$1 >= 60" | bc -l)" = "1" ]; then echo "🟡"; else echo "🔴"; fi; }
+          badge() { if [ "$(echo "$1 >= 90" | bc -l)" = "1" ]; then echo "🟢"; elif [ "$(echo "$1 >= 80" | bc -l)" = "1" ]; then echo "🟡"; else echo "🔴"; fi; }
 
           TS_BADGE=$(badge "$TS_LINES" 2>/dev/null || echo "⚪")
           RS_BADGE=$(badge "$RS_LINES" 2>/dev/null || echo "⚪")

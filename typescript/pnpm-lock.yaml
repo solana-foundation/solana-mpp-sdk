@@ -29,9 +29,6 @@ importers:
       prettier:
         specifier: ^3.8.1
         version: 3.8.1
-      surfpool-sdk:
-        specifier: link:/Users/ludovic/Coding/surfpool/crates/sdk-node
-        version: link:../../surfpool/crates/sdk-node
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
