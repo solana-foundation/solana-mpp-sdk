@@ -14,7 +14,6 @@ import {
 import { registerStocks } from './modules/stocks.js'
 import { registerWeather } from './modules/weather.js'
 import { registerFaucet } from './modules/faucet.js'
-import { registerSwigSession } from './modules/swigSession.js'
 import { registerMarketplace } from './modules/marketplace.js'
 
 // Recipient is the address that receives payments.
@@ -102,7 +101,6 @@ app.get('/api/v1/health', async (_req: Request, res: Response) => {
 registerStocks(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 registerWeather(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 registerFaucet(app, NETWORK)
-registerSwigSession(app, RECIPIENT, NETWORK, SECRET_KEY)
 registerMarketplace(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 
 // Serve SPA in production
@@ -140,9 +138,6 @@ app.listen(PORT, () => {
     { method: 'GET',  path: '/api/v1/weather/:city',          cost: '0.01 USDC' },
     { method: 'GET',  path: '/api/v1/marketplace/products',    cost: '' },
     { method: 'GET',  path: '/api/v1/marketplace/buy/:id',    cost: 'varies (splits: seller + platform 5% + referral 2%)' },
-    { method: 'GET',  path: '/api/v1/swig/research/:topic',   cost: '0.01 USDC/request (settled on close)' },
-    { method: 'GET',  path: '/api/v1/swig/risk/:symbol',      cost: '0.01 USDC/request (settled on close)' },
-    { method: 'GET',  path: '/api/v1/swig/status',            cost: '' },
     { method: 'POST', path: '/api/v1/faucet/airdrop',         cost: '' },
     { method: 'GET',  path: '/api/v1/faucet/status',           cost: '' },
   ]

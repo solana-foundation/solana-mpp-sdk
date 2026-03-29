@@ -79,9 +79,6 @@ impl IntentName {
         self.0.eq_ignore_ascii_case("charge")
     }
 
-    pub fn is_session(&self) -> bool {
-        self.0.eq_ignore_ascii_case("session")
-    }
 }
 
 impl Deref for IntentName {
@@ -232,11 +229,6 @@ mod tests {
     fn intent_name_variants() {
         let charge: IntentName = "charge".into();
         assert!(charge.is_charge());
-        assert!(!charge.is_session());
-
-        let session: IntentName = "SESSION".into();
-        assert!(session.is_session());
-        assert_eq!(session.as_str(), "session");
     }
 
     #[test]
@@ -324,8 +316,8 @@ mod tests {
 
     #[test]
     fn intent_name_display() {
-        let i = IntentName::new("session");
-        assert_eq!(format!("{i}"), "session");
+        let i = IntentName::new("charge");
+        assert_eq!(format!("{i}"), "charge");
     }
 
     #[test]
@@ -341,16 +333,9 @@ mod tests {
     }
 
     #[test]
-    fn intent_name_is_session_case_insensitive() {
-        let i = IntentName::new("Session");
-        assert!(i.is_session());
-    }
-
-    #[test]
-    fn intent_name_neither_charge_nor_session() {
+    fn intent_name_is_not_charge() {
         let i = IntentName::new("subscribe");
         assert!(!i.is_charge());
-        assert!(!i.is_session());
     }
 
     // ── Base64UrlJson edge cases ──

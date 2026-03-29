@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn challenge_with_secret_key_full_verify() {
         let request = Base64UrlJson::from_value(&serde_json::json!({"amount": "5000"})).unwrap();
-        let opaque = Base64UrlJson::from_value(&serde_json::json!({"session": "xyz"})).unwrap();
+        let opaque = Base64UrlJson::from_value(&serde_json::json!({"context": "xyz"})).unwrap();
         let challenge = PaymentChallenge::with_secret_key_full(
             "my-secret",
             "realm.example.com",
@@ -565,7 +565,7 @@ mod tests {
         let diff_method =
             compute_challenge_id("key", "realm", "bitcoin", "charge", "req", None, None, None);
         let diff_intent =
-            compute_challenge_id("key", "realm", "solana", "session", "req", None, None, None);
+            compute_challenge_id("key", "realm", "solana", "subscribe", "req", None, None, None);
         let diff_request =
             compute_challenge_id("key", "realm", "solana", "charge", "xyz", None, None, None);
         let with_expires = compute_challenge_id(

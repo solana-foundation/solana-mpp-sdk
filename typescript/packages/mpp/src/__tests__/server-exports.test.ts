@@ -6,7 +6,7 @@
 import { Store } from 'mppx/server';
 
 import { solana } from '../server/Methods.js';
-import { charge, session, solana as solanaFromIndex } from '../server/index.js';
+import { charge, solana as solanaFromIndex } from '../server/index.js';
 
 const RECIPIENT = '9xAXssX9j7vuK99c7cFwqbixzL3bFrzPy9PUhCtDPAYJ';
 
@@ -17,10 +17,6 @@ describe('server/Methods.ts', () => {
 
     test('solana.charge is a function', () => {
         expect(typeof solana.charge).toBe('function');
-    });
-
-    test('solana.session is a function', () => {
-        expect(typeof solana.session).toBe('function');
     });
 
     test('solana() creates a charge method (default)', () => {
@@ -49,10 +45,6 @@ describe('server/Methods.ts', () => {
 describe('server/index.ts', () => {
     test('exports charge function', () => {
         expect(typeof charge).toBe('function');
-    });
-
-    test('exports session function', () => {
-        expect(typeof session).toBe('function');
     });
 
     test('exports solana namespace', () => {

@@ -189,6 +189,7 @@ async function verifyTransaction(
 
     return Receipt.from({
         method: 'solana',
+        ...(credential.challenge.id ? { challengeId: credential.challenge.id } : {}),
         reference: signature,
         ...(challenge.externalId ? { externalId: challenge.externalId } : {}),
         status: 'success',
@@ -229,6 +230,7 @@ async function verifySignature(
 
     return Receipt.from({
         method: 'solana',
+        ...(credential.challenge.id ? { challengeId: credential.challenge.id } : {}),
         reference: signature,
         ...(challenge.externalId ? { externalId: challenge.externalId } : {}),
         status: 'success',

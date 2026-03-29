@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Routes, Route } from "react-router-dom";
 import Landing from "./Landing.js";
-import SwigPlayground from "./SwigPlayground.js";
 import WalletSetup from "./components/WalletSetup.js";
 import WalletModal from "./components/WalletModal.js";
 import CodeBlock from "./components/CodeBlock.js";
@@ -389,7 +388,6 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/charges" element={<Playground />} />
-      <Route path="/sessions" element={<SwigPlayground />} />
     </Routes>
   );
 }

@@ -1,5 +1,4 @@
 import { charge as charge_ } from './Charge.js';
-import { session as session_ } from './Session.js';
 
 /**
  * Creates a Solana `charge` method for usage on the client.
@@ -20,10 +19,8 @@ import { session as session_ } from './Session.js';
 export const solana: {
     (parameters: solana.Parameters): ReturnType<typeof charge_>;
     charge: typeof charge_;
-    session: typeof session_;
 } = Object.assign((parameters: solana.Parameters) => charge_(parameters), {
     charge: charge_,
-    session: session_,
 });
 
 export declare namespace solana {

@@ -4,7 +4,7 @@
  * Validates that the client barrel modules expose the expected public API.
  */
 import { solana } from '../client/Methods.js';
-import { charge, session, solana as solanaFromIndex } from '../client/index.js';
+import { charge, solana as solanaFromIndex } from '../client/index.js';
 
 describe('client/Methods.ts', () => {
     test('solana is a callable function', () => {
@@ -14,19 +14,11 @@ describe('client/Methods.ts', () => {
     test('solana.charge is a function', () => {
         expect(typeof solana.charge).toBe('function');
     });
-
-    test('solana.session is a function', () => {
-        expect(typeof solana.session).toBe('function');
-    });
 });
 
 describe('client/index.ts', () => {
     test('exports charge function', () => {
         expect(typeof charge).toBe('function');
-    });
-
-    test('exports session function', () => {
-        expect(typeof session).toBe('function');
     });
 
     test('exports solana namespace', () => {

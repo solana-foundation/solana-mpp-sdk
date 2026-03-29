@@ -59,9 +59,6 @@ const response = await mppx.fetch(url)`}</pre>
           <button style={s.cta} onClick={() => nav("/charges")}>
             Try Charge Demo
           </button>
-          <button style={s.ctaAlt} onClick={() => nav("/sessions")}>
-            Try Session Demo
-          </button>
         </div>
       </div>
     </div>
@@ -115,12 +112,6 @@ const s: Record<string, React.CSSProperties> = {
     fontSize: 14,
     color: "#E0E0E0",
   },
-  sessionTag: {
-    marginTop: -8,
-    marginBottom: 24,
-    color: "#7b83a2",
-    fontSize: 13,
-  },
   codePreview: {
     textAlign: "left",
     background: "#111",
@@ -164,17 +155,5 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: "pointer",
     letterSpacing: 0.5,
-  },
-  ctaAlt: {
-    padding: "14px 22px",
-    background: "#13221d",
-    border: "1px solid #1f5f4c",
-    borderRadius: 10,
-    color: "#14F195",
-    fontFamily: "JetBrains Mono, monospace",
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: "pointer",
-    letterSpacing: 0.3,
   },
 };
