@@ -6,5 +6,12 @@ export default defineConfig({
         exclude: ['**/integration.test.ts'],
         testTimeout: 15_000,
         globals: true,
+        coverage: {
+            provider: 'v8',
+            reporter: ['text', 'lcov', 'json-summary'],
+            reportsDirectory: 'coverage',
+            include: ['packages/*/src/**/*.ts'],
+            exclude: ['**/__tests__/**', '**/dist/**', '**/*.test.ts'],
+        },
     },
 });

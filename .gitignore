@@ -3,6 +3,10 @@ dist/
 .env
 *.tsbuildinfo
 
+# Coverage
+coverage/
+*.lcov
+
 # Rust
 target/
 Cargo.lock

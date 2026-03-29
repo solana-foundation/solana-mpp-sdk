@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_call:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 defaults:
   run:
     working-directory: typescript
@@ -60,8 +64,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
-  test:
-    name: Unit tests
+  test-ts:
+    name: TypeScript tests + coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +78,77 @@ jobs:
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm test:coverage
+
+      - name: Coverage report
+        if: always() && github.event_name == 'pull_request'
+        uses: davelosert/vitest-coverage-report-action@v2
+        with:
+          working-directory: typescript
+          json-summary-path: coverage/coverage-summary.json
+          name: TypeScript
+
+  test-rust:
+    name: Rust tests + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-rust-
+
+      - name: Run tests with coverage
+        working-directory: rust
+        run: cargo llvm-cov --lcov --output-path coverage.lcov
+
+      - name: Generate coverage summary
+        if: always()
+        id: rust-cov
+        working-directory: rust
+        run: |
+          # Parse lcov to extract summary
+          TOTAL_LINES=$(grep -c "^DA:" coverage.lcov || echo 0)
+          HIT_LINES=$(grep "^DA:" coverage.lcov | grep -v ",0$" | wc -l | tr -d ' ')
+          if [ "$TOTAL_LINES" -gt 0 ]; then
+            PCT=$(echo "scale=1; $HIT_LINES * 100 / $TOTAL_LINES" | bc)
+          else
+            PCT="0.0"
+          fi
+          echo "total=$TOTAL_LINES" >> $GITHUB_OUTPUT
+          echo "hit=$HIT_LINES" >> $GITHUB_OUTPUT
+          echo "pct=$PCT" >> $GITHUB_OUTPUT
+
+      - name: Comment PR with Rust coverage
+        if: always() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: rust-coverage
+          message: |
+            ### Rust Coverage
+
+            | Metric | Value |
+            |--------|-------|
+            | Lines covered | ${{ steps.rust-cov.outputs.hit }} / ${{ steps.rust-cov.outputs.total }} |
+            | Coverage | **${{ steps.rust-cov.outputs.pct }}%** |
+
+      - name: Rust format check
+        working-directory: rust
+        run: cargo fmt --check
 
   integration:
     name: Integration tests
