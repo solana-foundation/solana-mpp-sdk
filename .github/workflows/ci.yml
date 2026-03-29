@@ -82,7 +82,16 @@ jobs:
       # This will be replaced with a published npm package once surfpool-sdk is released.
       - name: Install Rust (for surfpool-sdk-node)
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache surfpool-sdk-node build
+        id: cache-surfpool
+        uses: actions/cache@v4
+        with:
+          path: /tmp/surfpool
+          key: surfpool-sdk-node-${{ runner.os }}-${{ runner.arch }}-v2
+
       - name: Clone and build surfpool-sdk-node
+        if: steps.cache-surfpool.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch feat/sdk https://github.com/solana-foundation/surfpool.git /tmp/surfpool
           cd /tmp/surfpool/crates/sdk-node
