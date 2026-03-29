@@ -304,7 +304,7 @@ describe('client charge integration (surfpool)', () => {
             const remoteSurfnet = Surfnet.startWithConfig({
                 remoteRpcUrl: 'https://api.mainnet-beta.solana.com',
             });
-            const remoteSigner = await createKeyPairSignerFromBytes(remoteSurfnet.payerSecretKey);
+            const remoteSigner = await createKeyPairSignerFromBytes(new Uint8Array(remoteSurfnet.payerSecretKey));
             remoteSurfnet.fundSol(remoteSigner.address, 10_000_000_000);
 
             // Use the real mainnet USDC mint address.
