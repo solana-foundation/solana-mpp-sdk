@@ -437,10 +437,11 @@ impl Mpp {
         let mut tx: Transaction = bincode::deserialize(&tx_bytes)
             .map_err(|e| VerificationError::invalid_payload(format!("Invalid transaction: {e}")))?;
 
+        let t0 = std::time::Instant::now();
+
         // Verify the transaction instructions BEFORE co-signing or broadcasting.
-        // This prevents the server from signing an unverified transaction and
-        // prevents fund loss on invalid credentials.
         verify_transaction_pre_broadcast(&tx, request, method_details)?;
+        tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "verify_pull: pre-broadcast check done");
 
         // Co-sign if server is fee payer (only after verification passes).
         if method_details.fee_payer.unwrap_or(false) {
@@ -466,6 +467,7 @@ impl Mpp {
                 })?;
             tx.signatures[idx] = sig;
         }
+        tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "verify_pull: co-sign done");
 
         // Simulate before broadcasting (prevent fee loss).
         let sim = self
@@ -477,12 +479,14 @@ impl Mpp {
                 "Simulation failed: {err}"
             )));
         }
+        tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "verify_pull: simulation done");
 
         // Broadcast.
         let signature = self
             .rpc
             .send_and_confirm_transaction(&tx)
             .map_err(|e| VerificationError::network_error(format!("Broadcast failed: {e}")))?;
+        tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "verify_pull: broadcast confirmed");
 
         Ok(signature.to_string())
     }
