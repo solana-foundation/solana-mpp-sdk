@@ -29,6 +29,7 @@ import { Credential, Method } from 'mppx';
 
 import { ASSOCIATED_TOKEN_PROGRAM, DEFAULT_RPC_URLS, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from '../constants.js';
 import * as Methods from '../Methods.js';
+import { toAtomicUnits } from '../utils/amounts.js';
 
 /**
  * Creates a Solana `charge` method for usage on the client.
@@ -92,8 +93,10 @@ export function charge(parameters: charge.Parameters) {
             const useServerFeePayer = serverPaysFees && feePayerKey && !broadcast;
 
             // Compute primary amount (total minus splits).
-            const splitsTotal = (splits ?? []).reduce((sum, s) => sum + BigInt(s.amount), 0n);
-            const primaryAmount = BigInt(amount) - splitsTotal;
+            // toAtomicUnits handles both integer ("1000") and decimal ("0.001")
+            // amount strings, using the challenge's decimals field when needed.
+            const splitsTotal = (splits ?? []).reduce((sum, s) => sum + toAtomicUnits(s.amount, decimals), 0n);
+            const primaryAmount = toAtomicUnits(amount, decimals) - splitsTotal;
 
             // Build transfer instructions.
             const instructions: Instruction[] = [];
@@ -163,7 +166,7 @@ export function charge(parameters: charge.Parameters) {
 
                 // Split transfers.
                 for (const split of splits ?? []) {
-                    await addSplTransfer(split.recipient, BigInt(split.amount));
+                    await addSplTransfer(split.recipient, toAtomicUnits(split.amount, decimals));
                 }
             } else {
                 // ── Native SOL transfers ──
@@ -180,7 +183,7 @@ export function charge(parameters: charge.Parameters) {
                 for (const split of splits ?? []) {
                     instructions.push(
                         getTransferSolInstruction({
-                            amount: BigInt(split.amount),
+                            amount: toAtomicUnits(split.amount, decimals),
                             destination: address(split.recipient),
                             source: signer,
                         }),
