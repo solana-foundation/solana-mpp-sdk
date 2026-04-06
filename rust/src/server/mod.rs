@@ -18,6 +18,8 @@
 //! let receipt = mpp.verify_credential(&credential).await?;
 //! ```
 
+pub mod html;
+
 use std::sync::Arc;
 
 use solana_pubkey::Pubkey;
@@ -81,6 +83,8 @@ pub struct Config {
     pub fee_payer_signer: Option<Arc<dyn solana_keychain::SolanaSigner>>,
     /// Replay protection store (defaults to in-memory).
     pub store: Option<Arc<dyn Store>>,
+    /// Enable HTML payment link pages for browser requests.
+    pub html: bool,
 }
 
 impl Default for Config {
@@ -96,6 +100,7 @@ impl Default for Config {
             fee_payer: false,
             fee_payer_signer: None,
             store: None,
+            html: false,
         }
     }
 }
@@ -118,6 +123,7 @@ pub struct ChargeOptions<'a> {
 #[derive(Clone)]
 pub struct Mpp {
     rpc: Arc<RpcClient>,
+    rpc_url: String,
     realm: String,
     secret_key: String,
     currency: String,
@@ -127,6 +133,7 @@ pub struct Mpp {
     fee_payer: bool,
     fee_payer_signer: Option<Arc<dyn solana_keychain::SolanaSigner>>,
     store: Arc<dyn Store>,
+    html: bool,
 }
 
 impl Mpp {
@@ -146,7 +153,8 @@ impl Mpp {
         let store: Arc<dyn Store> = config.store.unwrap_or_else(|| Arc::new(MemoryStore::new()));
 
         Ok(Mpp {
-            rpc: Arc::new(RpcClient::new(rpc_url)),
+            rpc: Arc::new(RpcClient::new(rpc_url.clone())),
+            rpc_url,
             realm,
             secret_key,
             currency: config.currency,
@@ -156,6 +164,7 @@ impl Mpp {
             fee_payer: config.fee_payer,
             fee_payer_signer: config.fee_payer_signer,
             store,
+            html: config.html,
         })
     }
 
@@ -175,6 +184,19 @@ impl Mpp {
 
     pub fn decimals(&self) -> u32 {
         self.decimals
+    }
+
+    pub fn network(&self) -> &str {
+        &self.network
+    }
+
+    pub fn rpc_url(&self) -> &str {
+        &self.rpc_url
+    }
+
+    /// Whether HTML payment link pages are enabled.
+    pub fn html_enabled(&self) -> bool {
+        self.html
     }
 
     // ── Challenge generation ──

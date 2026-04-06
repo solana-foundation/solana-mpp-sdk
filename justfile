@@ -51,15 +51,33 @@ rs-fmt:
 rs-lint:
     cd rust && cargo clippy -- -D warnings
 
+# ── HTML Payment Links ──
+
+# Install HTML payment link dependencies
+html-install:
+    cd html && npm install
+
+# Build HTML payment link assets (bundles JS for all server implementations)
+html-build:
+    cd html && npm run build
+
+# Build HTML assets in test mode (with sourcemaps)
+html-build-test:
+    cd html && npm run build:test
+
+# Run payment link E2E tests (requires Surfpool on :8899 and demo server on :3000)
+html-test-e2e:
+    cd html && npm run test:e2e
+
 # ── Orchestration ──
 
-# Build everything
-build: ts-build rs-build
+# Build compiled SDKs
+build: html-build ts-build rs-build
 
 # Run all unit tests
-test: ts-test rs-test
+test: ts-test rs-test go-test lua-test
 
-# Run all tests including integration
+# Run all tests including integration + coverage gates
 test-all: ts-test ts-test-integration rs-test
 
 # Format everything

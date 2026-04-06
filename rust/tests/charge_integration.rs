@@ -536,5 +536,9 @@ async fn usdc_charge_wrong_amount_no_broadcast() {
 /// Run after other tests: cargo test --test charge_integration generate_report
 #[test]
 fn generate_report() {
-    surfpool_sdk::report::SurfpoolReport::generate(None, None);
+    if let Ok(report) =
+        surfpool_sdk::report::SurfpoolReport::from_directory("target/surfpool-reports")
+    {
+        let _ = report.write_html("target/surfpool-report.html");
+    }
 }

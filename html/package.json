@@ -1,0 +1,26 @@
+{
+  "name": "@mpp/html",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx build.ts",
+    "build:test": "TEST=1 tsx build.ts",
+    "test:e2e": "npx playwright test tests/payment-link.test.ts --config tests/playwright.config.ts",
+    "test:e2e:demo": "FORTUNE_PATH=/api/v1/fortune BASE_URL=http://localhost:3000 npx playwright test tests/payment-link.test.ts --config tests/playwright.config.ts",
+    "test:e2e:rust": "BASE_URL=http://localhost:3001 npx playwright test tests/payment-link.test.ts --config tests/playwright.config.ts",
+    "test:e2e:go": "BASE_URL=http://localhost:3002 npx playwright test tests/payment-link.test.ts --config tests/playwright.config.ts",
+    "test:e2e:lua": "BASE_URL=http://localhost:3003 npx playwright test tests/payment-link.test.ts --config tests/playwright.config.ts"
+  },
+  "dependencies": {
+    "@solana-program/token": "^0.5.0",
+    "@solana/connector": "^0.2.4",
+    "@solana/kit": "^2.1.0",
+    "mppx": "^0.5.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

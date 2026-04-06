@@ -53,6 +53,10 @@ mpp-sdk/
 │           └── authorizers/       # Pluggable authorization strategies
 ├── rust/                          # Rust SDK (coming soon)
 │   └── src/lib.rs
+├── go/                            # Go SDK
+│   ├── client/                    # Client: build tx, sign, optional broadcast
+│   ├── server/                    # Server: challenge, verify, broadcast
+│   └── protocol/                  # Shared headers, challenge types, charge schema
 └── demo/                          # Interactive playground
 ```
 
@@ -194,11 +198,16 @@ just ts-test-integration # Integration tests (requires Surfpool)
 # Rust
 cd rust && cargo build
 
+# Go
+cd go && go test ./...
+
 # Everything
-just build            # Build both
-just test             # Test both
+just build            # Build compiled SDKs
+just test             # Test all SDKs
 just pre-commit       # Full pre-commit checks
 ```
+
+See [lua/README.md](lua/README.md) for Lua SDK details and test coverage usage.
 
 ## Spec
 

@@ -7,6 +7,11 @@ dist/
 coverage/
 *.lcov
 
+# Generated HTML payment link assets (built from html/)
+# Rust/Go/Lua gen files are committed (needed for cargo publish / go get).
+# TypeScript gen file is gitignored (npm publishes dist/).
+typescript/packages/mpp/src/server/html-assets.gen.ts
+
 # Rust
 target/
 Cargo.lock
@@ -15,3 +20,4 @@ Cargo.lock
 .npm-pack/
 DUMP.md
 package/
+go/payment-link-server
