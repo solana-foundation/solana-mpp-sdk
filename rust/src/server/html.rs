@@ -67,27 +67,66 @@ pub fn service_worker_js() -> &'static str {
 /// All user-controlled values are HTML-escaped to prevent XSS.
 pub fn challenge_to_html(challenge: &PaymentChallenge, rpc_url: &str, network: &str) -> String {
     let challenge_json = serde_json::to_string_pretty(challenge).unwrap_or_default();
-    let test_mode = matches!(network, "devnet" | "localnet");
 
-    // Build the embedded data object for the payment UI
+    // Build embedded data in the standalone format (challenge.request stays as base64url)
     let embedded_data = serde_json::json!({
         "challenge": challenge,
         "network": network,
         "rpcUrl": rpc_url,
-        "testMode": test_mode,
     });
     let embedded_json = serde_json::to_string(&embedded_data).unwrap_or_default();
 
-    let description_line = challenge
+    // Decode request for display
+    let decoded: serde_json::Value = challenge
+        .request
+        .decode()
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let amount_raw = decoded["amount"].as_str().unwrap_or("0");
+    let currency = decoded["currency"].as_str().unwrap_or("SOL");
+    let decimals_val = decoded["methodDetails"]["decimals"].as_u64().unwrap_or(
+        if currency.to_lowercase() == "sol" {
+            9
+        } else {
+            6
+        },
+    );
+    let amount_f: f64 = amount_raw.parse::<f64>().unwrap_or(0.0) / 10f64.powi(decimals_val as i32);
+    let display_amount = if amount_f == amount_f.floor() {
+        format!("{:.0}", amount_f)
+    } else {
+        format!("{:.2}", amount_f)
+    };
+
+    // Known stablecoin symbols
+    let display_currency = match currency {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        | "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" => "USDC",
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" => "USDT",
+        c if c.to_lowercase() == "sol" => "SOL",
+        _ => &currency[..6.min(currency.len())],
+    };
+    let amount_display = if display_currency == "SOL" {
+        format!("{} SOL", display_amount)
+    } else {
+        format!("${}", display_amount)
+    };
+
+    let description_html = challenge
         .description
         .as_deref()
         .map(|d| {
             format!(
-                "<p style=\"color:#4a5568;text-align:center\">{}</p>",
+                "<div style=\"font-size:14px;color:#666;margin-bottom:16px\">{}</div>",
                 escape_html(d)
             )
         })
         .unwrap_or_default();
+
+    let test_badge = if matches!(network, "devnet" | "localnet") {
+        format!("<span style=\"font-size:11px;color:#888;background:#f0f0f0;padding:2px 8px;border-radius:4px;margin-left:8px\">{}</span>", network)
+    } else {
+        String::new()
+    };
 
     format!(
         r#"<!DOCTYPE html>
@@ -95,27 +134,49 @@ pub fn challenge_to_html(challenge: &PaymentChallenge, rpc_url: &str, network: &
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Payment Required</title>
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; background: #f7fafc; color: #1a202c; }}
-pre {{ background: #edf2f7; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; max-width: 600px; margin: 20px auto; }}
+:root {{ color-scheme: light dark; }}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: light-dark(#fafafa, #0a0a0a); color: light-dark(#111, #eee); }}
+.card {{ max-width: 380px; width: 100%; padding: 32px; border-radius: 12px; border: 1px solid light-dark(#e5e5e5, #2e2e2e); background: light-dark(#fff, #141414); }}
+.badge {{ font-size: 11px; font-weight: 500; color: light-dark(#666, #999); background: light-dark(#f5f5f5, #222); padding: 3px 8px; border-radius: 4px; }}
+.amount {{ font-size: 32px; font-weight: 700; text-align: center; margin: 24px 0; }}
+.desc {{ font-size: 14px; color: light-dark(#666, #999); text-align: center; margin-bottom: 24px; }}
+.details {{ margin-top: 20px; }}
+.details summary {{ cursor: pointer; font-size: 12px; color: light-dark(#999, #666); }}
+.details pre {{ background: light-dark(#f5f5f5, #1a1a1a); padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto; margin-top: 8px; }}
 </style>
 </head>
 <body>
-{description}
-<details style="max-width:600px;margin:0 auto 20px">
-<summary style="cursor:pointer;color:#718096;font-size:14px">Challenge details</summary>
+<div class="card">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+<span class="badge">Payment Required</span>
+{test_badge}
+</div>
+<div class="amount">{amount_display}</div>
+{description_html}
+<div id="root"></div>
+<details class="details">
+<summary>Challenge details</summary>
 <pre>{challenge_json}</pre>
 </details>
-<div id="root"></div>
+</div>
 <script type="application/json" id="{data_id}">{embedded_json}</script>
 <script>{payment_ui_js}</script>
 </body>
 </html>"#,
-        description = description_line,
+        test_badge = if test_badge.is_empty() {
+            String::new()
+        } else {
+            test_badge
+        },
+        amount_display = escape_html(&amount_display),
+        description_html = description_html,
         challenge_json = escape_html(&challenge_json),
         data_id = DATA_ELEMENT_ID,
-        embedded_json = embedded_json, // JSON is safe inside type="application/json"
+        embedded_json = embedded_json,
         payment_ui_js = PAYMENT_UI_JS,
     )
 }

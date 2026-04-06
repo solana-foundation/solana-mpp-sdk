@@ -18,7 +18,7 @@ test('clicking pay triggers the payment flow', async ({ page, context }) => {
   await page.getByRole('button', { name: /Continue with Solana/i }).click();
 
   const sw = await swPromise;
-  expect(sw.url()).toContain('__mppx_worker');
+  expect(sw.url()).toMatch(/__mpp_worker|__mppx_worker/);
 });
 
 test('full e2e: payment completes and returns fortune', async ({ page }) => {
@@ -43,7 +43,11 @@ test('full e2e: payment completes and returns fortune', async ({ page }) => {
 });
 
 test('service worker endpoint returns javascript', async ({ page }) => {
-  const response = await page.goto(`${FORTUNE}?__mppx_worker=1`);
+  // Try mppx param first (TS demo), fall back to standalone param (Rust/Go/Lua)
+  let response = await page.goto(`${FORTUNE}?__mppx_worker=1`);
+  if (response?.status() !== 200) {
+    response = await page.goto(`${FORTUNE}?__mpp_worker=1`);
+  }
   expect(response?.status()).toBe(200);
   expect(response?.headers()['content-type']).toContain('application/javascript');
   const body = await response?.text();

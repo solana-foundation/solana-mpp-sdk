@@ -55,7 +55,7 @@ async fn fortune(
     }
 
     // Service worker JS.
-    if params.contains_key("__mpp_worker") {
+    if params.contains_key(html::SERVICE_WORKER_PARAM) {
         return (
             StatusCode::OK,
             [

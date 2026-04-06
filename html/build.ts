@@ -54,17 +54,22 @@ async function main() {
   // mppx injects `content` as raw HTML — wrap in <script> tags.
   const paymentUI = `<script>${paymentUIRaw}</script>`;
 
-  // 2. Write generated embedding files for each language
+  // 2. Build the service worker for standalone servers (Rust/Go/Lua)
+  const serviceWorker = await buildBundle('src/service-worker.ts', 'service-worker.js');
+
+  // 3. Write generated embedding files for each language
 
   // Rust: write JS for include_str!
   const rustDir = resolve(import.meta.dirname, '..', 'rust', 'src', 'server', 'html');
   mkdirSync(rustDir, { recursive: true });
   writeFileSync(resolve(rustDir, 'payment_ui.gen.js'), paymentUIRaw);
+  writeFileSync(resolve(rustDir, 'service_worker.gen.js'), serviceWorker);
 
   // Go: write JS for go:embed
   const goDir = resolve(import.meta.dirname, '..', 'go', 'server', 'html');
   mkdirSync(goDir, { recursive: true });
   writeFileSync(resolve(goDir, 'payment-ui.gen.js'), paymentUIRaw);
+  writeFileSync(resolve(goDir, 'service-worker.gen.js'), serviceWorker);
 
   // Lua: write as Lua module string
   const luaDir = resolve(import.meta.dirname, '..', 'lua', 'mpp', 'server', 'html_assets');

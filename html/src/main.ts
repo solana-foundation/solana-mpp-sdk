@@ -11,17 +11,27 @@ import { address } from '@solana/kit';
 import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 
-// ── Read mppx embedded data ──
+// ── Read embedded data (supports both mppx and standalone templates) ──
 
-const DATA_ID = '__MPPX_DATA__';
-const dataEl = document.getElementById(DATA_ID);
-if (!dataEl?.textContent) throw new Error(`Missing #${DATA_ID}`);
+const dataEl = document.getElementById('__MPPX_DATA__') ?? document.getElementById('__MPP_DATA__');
+if (!dataEl?.textContent) throw new Error('Missing embedded data element');
 
-const data = JSON.parse(dataEl.textContent);
-const challenge = data.challenge;
-const request = challenge.request;
+const rawData = JSON.parse(dataEl.textContent);
+
+// Normalize: mppx provides { challenge: { request: {decoded} } }
+// Standalone provides { challenge: { request: "base64url" }, network, rpcUrl }
+const isMppx = typeof rawData.challenge?.request === 'object';
+const challenge = rawData.challenge;
+const request = isMppx
+  ? challenge.request
+  : JSON.parse(atob(challenge.request.replace(/-/g, '+').replace(/_/g, '/')));
 const md = request.methodDetails ?? {};
-const network = md.network ?? 'mainnet-beta';
+const network = md.network ?? rawData.network ?? 'mainnet-beta';
+
+// For credential building: get the request as base64url string
+const requestB64ForCredential: string = isMppx
+  ? requestB64ForCredential
+  : challenge.request;
 const testMode = network === 'devnet' || network === 'localnet';
 
 // ── Render button ──
@@ -178,7 +188,7 @@ async function payWithWallet() {
   // Submit via service worker
   statusEl.textContent = 'Submitting payment...';
   const txBase64 = btoa(String.fromCharCode(...new Uint8Array(signedTransaction)));
-  const requestB64 = base64UrlEncode(JSON.stringify(challenge.request));
+  const requestB64 = requestB64ForCredential;
   const credential = {
     challenge: { id: challenge.id, intent: challenge.intent, method: challenge.method, realm: challenge.realm, request: requestB64, ...(challenge.expires && { expires: challenge.expires }), ...(challenge.description && { description: challenge.description }) },
     payload: { transaction: txBase64, type: 'transaction' },
@@ -287,7 +297,7 @@ async function payTestMode() {
   // Build credential
   statusEl.textContent = 'Submitting payment...';
   const txBase64 = btoa(String.fromCharCode(...txBytes));
-  const requestB64 = base64UrlEncode(JSON.stringify(challenge.request));
+  const requestB64 = requestB64ForCredential;
   const credential = {
     challenge: { id: challenge.id, intent: challenge.intent, method: challenge.method, realm: challenge.realm, request: requestB64, ...(challenge.expires && { expires: challenge.expires }), ...(challenge.description && { description: challenge.description }) },
     payload: { transaction: txBase64, type: 'transaction' },
@@ -302,7 +312,9 @@ async function payTestMode() {
 
 async function submitViaServiceWorker(credentialHeader: string) {
   const url = new URL(window.location.href);
-  url.searchParams.set('__mppx_worker', '1');
+  // mppx uses __mppx_worker, standalone Rust/Go/Lua use __mpp_worker
+  const swParam = isMppx ? '__mppx_worker' : '__mpp_worker';
+  url.searchParams.set(swParam, '1');
 
   const reg = await navigator.serviceWorker.register(url.toString(), { scope: '/' });
   const worker = reg.installing ?? reg.waiting ?? reg.active;
@@ -318,7 +330,12 @@ async function submitViaServiceWorker(credentialHeader: string) {
 
   await new Promise<void>((resolve, reject) => {
     const ch = new MessageChannel();
-    ch.port1.onmessage = e => e.data === 'ack' ? resolve() : reject(new Error('SW nack'));
+    ch.port1.onmessage = e => {
+      // mppx SW acks with "ack", standalone SW acks with { received: true }
+      if (e.data === 'ack' || e.data?.received) resolve();
+      else reject(new Error('SW nack'));
+    };
+    // mppx SW expects { credential: "Payment <b64>" }, standalone expects { credential: "<b64>" }
     active.postMessage({ credential: credentialHeader }, [ch.port2]);
   });
 
