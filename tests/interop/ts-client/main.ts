@@ -12,6 +12,7 @@
  */
 
 import {
+  AccountRole,
   address,
   appendTransactionMessageInstruction,
   compileTransaction,
@@ -264,6 +265,59 @@ async function main() {
   // Build instructions
   const instructions: IInstruction[] = [];
 
+  // 1. Compute budget instructions (always first)
+  const COMPUTE_BUDGET_PROGRAM = address('ComputeBudget111111111111111111111111111111');
+
+  // SetComputeUnitPrice: discriminator 3 + u64 LE value 1
+  const priceData = new Uint8Array(9);
+  priceData[0] = 3;
+  priceData[1] = 1; // 1 micro-lamport
+  instructions.push({
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    data: priceData,
+    accounts: [],
+  });
+
+  // SetComputeUnitLimit: discriminator 2 + u32 LE value 200000
+  const limitData = new Uint8Array(5);
+  limitData[0] = 2;
+  new DataView(limitData.buffer).setUint32(1, 200_000, true);
+  instructions.push({
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    data: limitData,
+    accounts: [],
+  });
+
+  // Helper: build a CreateIdempotent ATA instruction
+  const ATA_PROGRAM = address('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+  const SYSTEM_PROGRAM = address('11111111111111111111111111111111');
+
+  function buildCreateIdempotentAtaIx(
+    payerAddr: Address,
+    ataAddr: Address,
+    ownerAddr: Address,
+    mintAddr: Address,
+    tokenProgramAddr: Address,
+  ): IInstruction {
+    return {
+      programAddress: ATA_PROGRAM,
+      data: new Uint8Array([1]), // CreateIdempotent discriminator
+      accounts: [
+        { address: payerAddr, role: AccountRole.WRITABLE_SIGNER },
+        { address: ataAddr, role: AccountRole.WRITABLE },
+        { address: ownerAddr, role: AccountRole.READONLY },
+        { address: mintAddr, role: AccountRole.READONLY },
+        { address: SYSTEM_PROGRAM, role: AccountRole.READONLY },
+        { address: tokenProgramAddr, role: AccountRole.READONLY },
+      ],
+    };
+  }
+
+  // Determine the ATA payer: fee payer if in fee payer mode, otherwise signer
+  const ataPayer: Address = hasSeparateFeePayer
+    ? address(md.feePayerKey!)
+    : signer.address;
+
   if (isNativeSOL) {
     // Primary SOL transfer
     instructions.push(
@@ -295,11 +349,16 @@ async function main() {
       tokenProgram: tokenProgramAddress,
     });
 
+    // Primary recipient: CreateIdempotent ATA + TransferChecked
     const [destAta] = await findAssociatedTokenPda({
       owner: address(recipient),
       mint: mintAddress,
       tokenProgram: tokenProgramAddress,
     });
+
+    instructions.push(
+      buildCreateIdempotentAtaIx(ataPayer, destAta, address(recipient), mintAddress, tokenProgramAddress),
+    );
 
     instructions.push(
       getTransferCheckedInstruction({
@@ -312,12 +371,18 @@ async function main() {
       }),
     );
 
+    // Split recipients: CreateIdempotent ATA + TransferChecked each
     for (const s of splits) {
       const [splitAta] = await findAssociatedTokenPda({
         owner: address(s.recipient),
         mint: mintAddress,
         tokenProgram: tokenProgramAddress,
       });
+
+      instructions.push(
+        buildCreateIdempotentAtaIx(ataPayer, splitAta, address(s.recipient), mintAddress, tokenProgramAddress),
+      );
+
       instructions.push(
         getTransferCheckedInstruction({
           source: sourceAta,
