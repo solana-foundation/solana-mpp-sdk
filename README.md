@@ -25,7 +25,6 @@ The Solana MPP SDK is available in 5 languages. Every implementation follows the
 | **Split payments** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **SPL tokens** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Token-2022** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **HTTP middleware** | via mppx | — | ✅ | ✅ (`@pay`) | Kong plugin |
 | **Replay protection** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Session (pay-as-you-go)** | ✅ | — | — | — | — |
 
@@ -37,27 +36,22 @@ Every implementation is validated at three levels:
 2. **E2E payment tests** — Playwright browser tests verify the full payment link flow (wallet → transaction → service worker → on-chain verification) against Surfpool
 3. **Cross-language interop** — a shared Python test suite runs the same protocol conformance tests against every server implementation, proving that any client can pay any server
 
-The interop matrix tests a Python client against Rust, Go, Python, and Lua servers — each running the same Surfpool instance. This catches protocol divergences that per-language unit tests miss.
+The interop matrix tests every client against every server. A shared Python test suite builds real Solana transactions and submits them to each server, verifying on-chain settlement via Surfpool. This catches protocol divergences that per-language unit tests miss.
 
 ```
-                    ┌──────────────┐
-                    │ Python Client│
-                    │  (pytest +   │
-                    │   solders)   │
-                    └──────┬───────┘
-                           │
-          ┌────────────────┼────────────────┐────────────────┐
-          ▼                ▼                ▼                ▼
-   ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐
-   │    Rust    │   │     Go     │   │    Lua     │   │   Python   │
-   │   :3001    │   │   :3002    │   │   :3003    │   │   :3004    │
-   └─────┬──────┘   └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
-         └────────────────┴────────────────┴────────────────┘
-                           │
-                    ┌──────┴───────┐
-                    │   Surfpool   │
-                    │    :8899     │
-                    └──────────────┘
+          Clients                          Servers
+   ┌────────────────┐              ┌────────────────────┐
+   │  TypeScript    │──────┐       │  TypeScript :3000   │
+   │  Rust          │──────┤       │  Rust       :3001   │
+   │  Go            │──────┼──────▶│  Go         :3002   │
+   │  Python        │──────┤       │  Lua        :3003   │
+   └────────────────┘      │       │  Python     :3004   │
+                           │       └─────────┬──────────┘
+                           │                 │
+                           │          ┌──────┴───────┐
+                           └─────────▶│   Surfpool   │
+                                      │    :8899     │
+                                      └──────────────┘
 ```
 
 ### Coverage
