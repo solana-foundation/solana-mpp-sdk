@@ -1,0 +1,99 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+
+	mpp "github.com/solana-foundation/mpp-sdk/go"
+)
+
+type contextKey string
+
+const receiptContextKey contextKey = "mpp-receipt"
+
+// ReceiptFromContext extracts the payment receipt from the request context.
+func ReceiptFromContext(ctx context.Context) (mpp.Receipt, bool) {
+	r, ok := ctx.Value(receiptContextKey).(mpp.Receipt)
+	return r, ok
+}
+
+// ChargeFunc returns the charge amount and options for a given request.
+type ChargeFunc func(r *http.Request) (amount string, opts ChargeOptions, err error)
+
+// PaymentMiddleware wraps an http.Handler to enforce MPP payments.
+// Requests without a valid credential get a 402 challenge.
+// Requests with a valid credential get the receipt injected into context.
+func PaymentMiddleware(m *Mpp, chargeFn ChargeFunc) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Serve the service worker JS when the query param is present.
+			if IsServiceWorkerRequest(r) {
+				w.Header().Set("Content-Type", "application/javascript")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(ServiceWorkerJS()))
+				return
+			}
+
+			// Check for a payment credential in the Authorization header.
+			authHeader := r.Header.Get(mpp.AuthorizationHeader)
+			if paymentToken, ok := mpp.ExtractPaymentScheme(authHeader); ok && paymentToken != "" {
+				credential, err := mpp.ParseAuthorization(authHeader)
+				if err == nil {
+					receipt, err := m.VerifyCredential(r.Context(), credential)
+					if err == nil {
+						receiptHeader, fmtErr := mpp.FormatReceipt(receipt)
+						if fmtErr == nil {
+							w.Header().Set(mpp.PaymentReceiptHeader, receiptHeader)
+						}
+						ctx := context.WithValue(r.Context(), receiptContextKey, receipt)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
+				// Invalid credential — fall through to re-challenge.
+			}
+
+			// Generate a challenge for this request.
+			amount, opts, err := chargeFn(r)
+			if err != nil {
+				http.Error(w, "charge function error", http.StatusInternalServerError)
+				return
+			}
+
+			challenge, err := m.ChargeWithOptions(r.Context(), amount, opts)
+			if err != nil {
+				http.Error(w, "failed to create challenge", http.StatusInternalServerError)
+				return
+			}
+
+			wwwAuth, err := mpp.FormatWWWAuthenticate(challenge)
+			if err != nil {
+				http.Error(w, "failed to format challenge", http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set(mpp.WWWAuthenticateHeader, wwwAuth)
+
+			if m.HTMLEnabled() && AcceptsHTML(r) {
+				html, err := m.ChallengeToHTML(challenge)
+				if err == nil {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.WriteHeader(http.StatusPaymentRequired)
+					w.Write([]byte(html))
+					return
+				}
+				// Fall through to JSON on HTML error.
+			}
+
+			challengeJSON, err := json.Marshal(challenge)
+			if err != nil {
+				http.Error(w, "failed to marshal challenge", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			w.Write(challengeJSON)
+		})
+	}
+}

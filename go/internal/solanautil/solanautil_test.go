@@ -144,6 +144,139 @@ func TestResolveTokenProgramUsesHint(t *testing.T) {
 	}
 }
 
+func TestSplitAmountsTooManySplits(t *testing.T) {
+	splits := make([]protocol.Split, 9)
+	for i := range splits {
+		splits[i] = protocol.Split{Recipient: testutil.NewPrivateKey().PublicKey().String(), Amount: "1"}
+	}
+	if _, err := SplitAmounts(100, splits); err == nil {
+		t.Fatal("expected error for >8 splits")
+	}
+}
+
+func TestSplitAmountsSplitTotalEqualsTotal(t *testing.T) {
+	splits := []protocol.Split{
+		{Recipient: testutil.NewPrivateKey().PublicKey().String(), Amount: "1000"},
+	}
+	if _, err := SplitAmounts(1000, splits); err == nil {
+		t.Fatal("expected error when splits consume entire amount")
+	}
+}
+
+func TestSplitAmountsNoSplits(t *testing.T) {
+	primary, err := SplitAmounts(1000, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if primary != 1000 {
+		t.Fatalf("expected 1000, got %d", primary)
+	}
+}
+
+func TestSplitAmountsInvalidAmount(t *testing.T) {
+	splits := []protocol.Split{
+		{Recipient: testutil.NewPrivateKey().PublicKey().String(), Amount: "not-a-number"},
+	}
+	if _, err := SplitAmounts(1000, splits); err == nil {
+		t.Fatal("expected error for invalid split amount")
+	}
+}
+
+func TestFindAssociatedTokenAddressWithProgramToken2022(t *testing.T) {
+	wallet := testutil.NewPrivateKey().PublicKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+	token2022 := solana.MustPublicKeyFromBase58(protocol.Token2022Program)
+	ata, err := FindAssociatedTokenAddressWithProgram(wallet, mint, token2022)
+	if err != nil {
+		t.Fatalf("ata token2022 failed: %v", err)
+	}
+	if ata.IsZero() {
+		t.Fatal("expected non-zero ATA")
+	}
+	// Verify it differs from standard token program ATA
+	stdAta, err := FindAssociatedTokenAddress(wallet, mint)
+	if err != nil {
+		t.Fatalf("ata standard failed: %v", err)
+	}
+	if ata.Equals(stdAta) {
+		t.Fatal("token2022 ATA should differ from standard token ATA")
+	}
+}
+
+func TestBuildTransferCheckedToken2022(t *testing.T) {
+	wallet := testutil.NewPrivateKey().PublicKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+	token2022 := solana.MustPublicKeyFromBase58(protocol.Token2022Program)
+	source, _ := FindAssociatedTokenAddressWithProgram(wallet, mint, token2022)
+	dest, _ := FindAssociatedTokenAddressWithProgram(testutil.NewPrivateKey().PublicKey(), mint, token2022)
+	ix, err := BuildTransferChecked(1000, 6, source, mint, dest, wallet, token2022)
+	if err != nil {
+		t.Fatalf("build transfer checked failed: %v", err)
+	}
+	if ix == nil {
+		t.Fatal("expected instruction")
+	}
+}
+
+func TestDecodeTransactionBase64InvalidBase64(t *testing.T) {
+	if _, err := DecodeTransactionBase64("!!!not-base64!!!"); err == nil {
+		t.Fatal("expected error for invalid base64")
+	}
+}
+
+func TestDecodeTransactionBase64InvalidTransaction(t *testing.T) {
+	// Valid base64 but not a valid transaction
+	if _, err := DecodeTransactionBase64("aGVsbG8="); err == nil {
+		t.Fatal("expected error for invalid transaction data")
+	}
+}
+
+func TestResolveRecentBlockhashWithProvided(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	provided := "4vJ9JU1bJJbzZ4aJ8AqGxH9bK5VwY8bGf3sD5QG6h7h"
+	hash, err := ResolveRecentBlockhash(context.Background(), rpcClient, provided)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	expected := solana.MustHashFromBase58(provided)
+	if hash != expected {
+		t.Fatalf("expected provided blockhash, got %s", hash)
+	}
+}
+
+func TestResolveRecentBlockhashEmptyFallsBackToRPC(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	hash, err := ResolveRecentBlockhash(context.Background(), rpcClient, "")
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if hash != rpcClient.Blockhash {
+		t.Fatalf("expected RPC blockhash %s, got %s", rpcClient.Blockhash, hash)
+	}
+}
+
+func TestResolveTokenProgramToken2022Owner(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	mint := testutil.NewPrivateKey().PublicKey()
+	rpcClient.MintOwners[mint.String()] = solana.MustPublicKeyFromBase58(protocol.Token2022Program)
+	program, err := ResolveTokenProgram(context.Background(), rpcClient, mint, "")
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if program.String() != protocol.Token2022Program {
+		t.Fatalf("expected token2022 program, got %s", program)
+	}
+}
+
+func TestResolveTokenProgramMintNotFound(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	mint := testutil.NewPrivateKey().PublicKey()
+	// Not in MintOwners map
+	if _, err := ResolveTokenProgram(context.Background(), rpcClient, mint, ""); err == nil {
+		t.Fatal("expected error for mint not found")
+	}
+}
+
 func TestWaitForConfirmationReturnsFailure(t *testing.T) {
 	rpcClient := testutil.NewFakeRPC()
 	signature := solana.MustSignatureFromBase58("5jKh25biPsnrmLWXXuqKNH2Q67Q4UmVVx8Gf2wrS6VoCeyfGE9wKikjY7Q1GQQgmpQ3xy7wJX5U1rcz82q4R8Nkv")

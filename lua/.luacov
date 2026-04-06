@@ -1,0 +1,16 @@
+return {
+  statsfile = "../luacov.stats.out",
+  reportfile = "../luacov.report.out",
+  include = {
+    "lua/mpp$",
+    "lua/mpp%/.+",
+  },
+  exclude = {
+    "lua/tests%/.+",
+  },
+  includeuntestedfiles = {
+    "mpp",
+  },
+  runreport = false,
+  deletestats = false,
+}

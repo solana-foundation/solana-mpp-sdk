@@ -52,3 +52,76 @@ func TestIntentNameIsCharge(t *testing.T) {
 		t.Fatal("expected charge intent")
 	}
 }
+
+func TestMethodNameInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"numbers", "123"},
+		{"uppercase", "ABC"},
+		{"spaces", "foo bar"},
+		{"special chars", "sol-ana"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Test raw string, not normalized
+			if MethodName(tc.input).IsValid() {
+				t.Fatalf("expected %q to be invalid", tc.input)
+			}
+		})
+	}
+}
+
+func TestBase64URLDecodeStandardBase64(t *testing.T) {
+	// Base64URLDecode should handle standard base64 with + / =
+	input := Base64URLEncode([]byte("test data"))
+	decoded, err := Base64URLDecode(input)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if string(decoded) != "test data" {
+		t.Fatalf("unexpected: %q", string(decoded))
+	}
+}
+
+func TestBase64URLJSONMarshalUnmarshal(t *testing.T) {
+	original, _ := NewBase64URLJSONValue(map[string]string{"key": "value"})
+	jsonBytes, err := original.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var restored Base64URLJSON
+	if err := restored.UnmarshalJSON(jsonBytes); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if restored.Raw() != original.Raw() {
+		t.Fatalf("round-trip mismatch: %q != %q", restored.Raw(), original.Raw())
+	}
+}
+
+func TestNewBase64URLJSONRaw(t *testing.T) {
+	raw := "dGVzdA"
+	b := NewBase64URLJSONRaw(raw)
+	if b.Raw() != raw {
+		t.Fatalf("expected raw %q, got %q", raw, b.Raw())
+	}
+}
+
+func TestBase64URLJSONIsEmpty(t *testing.T) {
+	empty := Base64URLJSON{}
+	if !empty.IsEmpty() {
+		t.Fatal("expected empty")
+	}
+	nonEmpty, _ := NewBase64URLJSONValue("test")
+	if nonEmpty.IsEmpty() {
+		t.Fatal("expected non-empty")
+	}
+}
+
+func TestIntentNameNotCharge(t *testing.T) {
+	if NewIntentName("subscribe").IsCharge() {
+		t.Fatal("subscribe should not be charge")
+	}
+}

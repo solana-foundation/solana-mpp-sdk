@@ -46,6 +46,7 @@ jobs:
 
   typecheck:
     name: Typecheck
+    needs: build-html
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +58,16 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
   test-ts:
     name: TypeScript tests
+    needs: build-html
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +79,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
 
       # TEMPORARY: Build surfpool-sdk-node native module for integration tests.
       # This will be replaced with a published npm package once surfpool-sdk is released.
@@ -124,8 +134,41 @@ jobs:
           path: typescript/target/surfpool-reports/
           if-no-files-found: ignore
 
+  build-html:
+    name: Build HTML payment link assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install and build
+        working-directory: html
+        run: |
+          npm install
+          npm run build
+      - name: Verify committed gen files are up to date
+        run: |
+          if ! git diff --quiet -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/ python/src/solana_mpp/server/html/; then
+            echo "::error::Generated files are out of date. Run 'just html-build' and commit the results."
+            git diff --stat -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/ python/src/solana_mpp/server/html/
+            exit 1
+          fi
+      - name: Upload HTML build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-assets
+          path: |
+            html/dist/
+            rust/src/server/html/
+            go/server/html/
+            lua/mpp/server/html_assets/
+            python/src/solana_mpp/server/html/
+            typescript/packages/mpp/src/server/html-assets.gen.ts
+
   test-rust:
     name: Rust tests
+    needs: build-html
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -141,6 +184,10 @@ jobs:
             rust/target
           key: ${{ runner.os }}-cargo-rust-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-rust-
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
 
       - name: Run tests with coverage
         working-directory: rust
@@ -192,6 +239,7 @@ jobs:
 
   integration:
     name: Integration tests
+    needs: build-html
     runs-on: ubuntu-latest
     services:
       surfpool:
@@ -209,6 +257,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
       - run: pnpm install --frozen-lockfile
       - name: Wait for Surfpool
         working-directory: .
@@ -221,3 +273,131 @@ jobs:
             sleep 1
           done
       - run: pnpm test:integration
+
+  test-payment-links-demo:
+    name: "Payment links E2E: Demo (TypeScript)"
+    needs: build-html
+    runs-on: ubuntu-latest
+    services:
+      surfpool:
+        image: surfpool/surfpool:latest
+        ports:
+          - 8899:8899
+          - 8900:8900
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
+      - name: Install TypeScript dependencies
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile
+      - name: Build TypeScript SDK
+        working-directory: typescript
+        run: pnpm build
+      - name: Install demo server dependencies
+        working-directory: demo/server
+        run: pnpm install --frozen-lockfile
+      - name: Install HTML dependencies & Playwright
+        working-directory: html
+        run: npm install && npx playwright install chromium
+      - name: Wait for Surfpool
+        working-directory: .
+        run: |
+          for i in $(seq 1 30); do
+            curl -s -X POST http://localhost:8899 \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}' \
+              && break
+            sleep 1
+          done
+      - name: Start demo server
+        working-directory: demo/server
+        run: npx tsx index.ts &
+        env:
+          NETWORK: localnet
+      - name: Wait for demo server
+        working-directory: .
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:3000/api/v1/health && break
+            sleep 1
+          done
+      - name: Run Playwright tests (Demo)
+        working-directory: html
+        run: npm run test:e2e:demo
+
+  test-payment-links-rust:
+    name: "Payment links E2E: Rust"
+    needs: build-html
+    runs-on: ubuntu-latest
+    services:
+      surfpool:
+        image: surfpool/surfpool:latest
+        ports:
+          - 8899:8899
+          - 8900:8900
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-rust-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
+      - name: Install HTML dependencies & Playwright
+        working-directory: html
+        run: npm install && npx playwright install chromium
+      - name: Build Rust test server
+        working-directory: rust
+        run: cargo build --example payment_link_server
+      - name: Wait for Surfpool
+        working-directory: .
+        run: |
+          for i in $(seq 1 30); do
+            curl -s -X POST http://localhost:8899 \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}' \
+              && break
+            sleep 1
+          done
+      - name: Start Rust test server
+        working-directory: rust
+        run: cargo run --example payment_link_server &
+      - name: Wait for Rust server
+        working-directory: .
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:3001/health && break
+            sleep 1
+          done
+      - name: Run Playwright tests (Rust)
+        working-directory: html
+        run: npm run test:e2e:rust
+
+  # TODO: Enable Go and Lua E2E tests once Go/Lua SDKs are in the CI build matrix
+  # test-payment-links-go:
+  #   name: "Payment links E2E: Go"
+  #   ...
+  # test-payment-links-lua:
+  #   name: "Payment links E2E: Lua"
+  #   ...

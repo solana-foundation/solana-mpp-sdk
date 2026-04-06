@@ -5,23 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	gohtml "html"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	mpp "github.com/solana-foundation/mpp-sdk/go"
 	"github.com/solana-foundation/mpp-sdk/go/protocol/intents"
 )
 
-//go:embed html/payment-ui.gen.js
-var paymentUIJS string
+//go:embed html/template.gen.html
+var htmlTemplate string
 
 //go:embed html/service-worker.gen.js
 var serviceWorkerJS string
 
-const (
-	dataElementID      = "__MPP_DATA__"
-	serviceWorkerParam = "__mpp_worker"
-)
+const serviceWorkerParam = "__mpp_worker"
 
 // HTMLEnabled reports whether HTML payment links are enabled.
 func (m *Mpp) HTMLEnabled() bool {
@@ -34,79 +33,106 @@ func (m *Mpp) RPCURL() string {
 }
 
 // ChallengeToHTML renders a self-contained HTML payment page for the given challenge.
-// The page embeds the challenge data and inlined payment UI JavaScript so that
-// a browser can complete the Solana payment flow without any external requests.
+// The page uses the mppx-generated template with placeholder replacements for
+// {{AMOUNT}}, {{DESCRIPTION}}, {{EXPIRES}}, and {{DATA_JSON}}.
 func (m *Mpp) ChallengeToHTML(challenge mpp.PaymentChallenge) (string, error) {
 	challengeJSON, err := json.Marshal(challenge)
 	if err != nil {
 		return "", fmt.Errorf("marshal challenge: %w", err)
 	}
 
-	// Decode the request field to extract the network for test-mode detection.
+	// Decode the request field to extract amount/currency for display.
 	var request intents.ChargeRequest
 	if err := challenge.Request.Decode(&request); err != nil {
 		return "", fmt.Errorf("decode challenge request: %w", err)
 	}
 
-	network := m.network
-	testMode := network == "devnet" || network == "localnet"
+	// Format the amount for display.
+	amountDisplay := formatAmountDisplay(request.Amount, request.Currency, m.decimals)
 
+	// Build description HTML.
+	descriptionHTML := ""
+	if challenge.Description != "" {
+		descriptionHTML = fmt.Sprintf(
+			`<p class="mppx-summary-description">%s</p>`,
+			escapeHTML(challenge.Description),
+		)
+	}
+
+	// Build expires HTML.
+	expiresHTML := ""
+	if challenge.Expires != "" {
+		escaped := escapeHTML(challenge.Expires)
+		expiresHTML = fmt.Sprintf(
+			`<p class="mppx-summary-expires">Expires at <time datetime="%s" id="_exp">%s</time></p><script>document.getElementById('_exp').textContent=new Date('%s').toLocaleString()</script>`,
+			escaped, escaped, escaped,
+		)
+	}
+
+	// Build embedded data JSON (challenge stays as original base64url string
+	// to preserve HMAC integrity).
 	embeddedData := map[string]any{
 		"challenge": json.RawMessage(challengeJSON),
-		"network":   network,
+		"network":   m.network,
 		"rpcUrl":    m.rpcURL,
-		"testMode":  testMode,
 	}
 	embeddedDataJSON, err := json.Marshal(embeddedData)
 	if err != nil {
 		return "", fmt.Errorf("marshal embedded data: %w", err)
 	}
+	// Escape < to prevent </script> injection in JSON inside <script> tag.
+	dataJSON := strings.ReplaceAll(string(embeddedDataJSON), "<", `\u003c`)
 
-	escapedChallengeJSON := gohtml.EscapeString(string(challengeJSON))
+	// Simple placeholder replacement on the mppx-generated template.
+	result := htmlTemplate
+	result = strings.Replace(result, "{{AMOUNT}}", escapeHTML(amountDisplay), 1)
+	result = strings.Replace(result, "{{DESCRIPTION}}", descriptionHTML, 1)
+	result = strings.Replace(result, "{{EXPIRES}}", expiresHTML, 1)
+	result = strings.Replace(result, "{{DATA_JSON}}", dataJSON, 1)
 
-	descriptionLine := ""
-	if request.Description != "" {
-		descriptionLine = fmt.Sprintf(`<p style="color:#4a5568;text-align:center">%s</p>`, gohtml.EscapeString(request.Description))
+	return result, nil
+}
+
+// formatAmountDisplay converts raw base-unit amount + currency into a
+// human-readable display string (e.g. "$1.00", "0.5 SOL").
+func formatAmountDisplay(amountRaw, currency string, decimals uint8) string {
+	d := int(decimals)
+	if strings.EqualFold(currency, "sol") {
+		d = 9
 	}
 
-	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Payment Required</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; background: #f7fafc; color: #1a202c; }
-pre { background: #edf2f7; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; max-width: 600px; margin: 20px auto; }
-</style>
-</head>
-<body>
-`)
-	b.WriteString(descriptionLine)
-	b.WriteString(`
-<details style="max-width:600px;margin:0 auto 20px">
-<summary style="cursor:pointer;color:#718096;font-size:14px">Challenge details</summary>
-<pre>`)
-	b.WriteString(escapedChallengeJSON)
-	b.WriteString(`</pre>
-</details>
-<div id="root"></div>
-<script type="application/json" id="`)
-	b.WriteString(dataElementID)
-	b.WriteString(`">`)
-	// JSON inside <script type="application/json"> is not parsed as HTML.
-	// Go's json.Marshal already escapes <, >, & in string values, so
-	// </script> injection is not possible.
-	b.Write(embeddedDataJSON)
-	b.WriteString(`</script>
-<script>`)
-	b.WriteString(paymentUIJS)
-	b.WriteString(`</script>
-</body>
-</html>`)
+	raw, err := strconv.ParseFloat(amountRaw, 64)
+	if err != nil {
+		raw = 0
+	}
+	amountF := raw / math.Pow10(d)
 
-	return b.String(), nil
+	displayAmount := strconv.FormatFloat(amountF, 'f', -1, 64)
+	if amountF != math.Floor(amountF) {
+		displayAmount = strconv.FormatFloat(amountF, 'f', 2, 64)
+	}
+
+	switch {
+	case currency == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		currency == "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+		currency == "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+		strings.EqualFold(currency, "USDC"),
+		strings.EqualFold(currency, "USDT"):
+		return "$" + displayAmount
+	case strings.EqualFold(currency, "sol"):
+		return displayAmount + " SOL"
+	default:
+		label := currency
+		if len(label) > 6 {
+			label = label[:6]
+		}
+		return displayAmount + " " + label
+	}
+}
+
+// escapeHTML escapes a string to prevent XSS when interpolating into HTML.
+func escapeHTML(s string) string {
+	return gohtml.EscapeString(s)
 }
 
 // ServiceWorkerJS returns the embedded service worker JavaScript content.

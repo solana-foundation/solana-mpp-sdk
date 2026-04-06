@@ -89,7 +89,7 @@ func New(config Config) (*Mpp, error) {
 		config.Network = "mainnet-beta"
 	}
 	if config.Realm == "" {
-		config.Realm = defaultRealm
+		config.Realm = DetectRealm()
 	}
 	rpcURL := config.RPCURL
 	if rpcURL == "" {

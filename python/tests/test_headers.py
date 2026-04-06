@@ -1,0 +1,211 @@
+"""Tests for _headers module."""
+
+from __future__ import annotations
+
+import pytest
+
+from solana_mpp._base64url import encode, encode_json
+from solana_mpp._headers import (
+    ParseError,
+    format_authorization,
+    format_receipt,
+    format_www_authenticate,
+    parse_authorization,
+    parse_receipt,
+    parse_www_authenticate,
+)
+from solana_mpp._types import ChallengeEcho, PaymentChallenge, PaymentCredential, Receipt
+
+
+class TestWWWAuthenticate:
+    def test_roundtrip(self):
+        challenge = PaymentChallenge(
+            id="abc123",
+            realm="api",
+            method="solana",
+            intent="charge",
+            request=encode_json({"amount": "10000", "currency": "USDC"}),
+            expires="2024-01-01T00:00:00Z",
+        )
+        header = format_www_authenticate(challenge)
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == "abc123"
+        assert parsed.realm == "api"
+        assert parsed.method == "solana"
+        assert parsed.intent == "charge"
+
+    def test_rejects_non_payment_scheme(self):
+        with pytest.raises(ParseError, match="Payment"):
+            parse_www_authenticate('Bearer realm="test"')
+
+    def test_rejects_empty_id(self):
+        header = 'Payment id="", realm="api", method="solana", intent="charge", request="e30"'
+        with pytest.raises(ParseError, match="Empty 'id'"):
+            parse_www_authenticate(header)
+
+    def test_rejects_uppercase_method(self):
+        header = 'Payment id="x", realm="api", method="SOLANA", intent="charge", request="e30"'
+        with pytest.raises(ParseError, match="Invalid method"):
+            parse_www_authenticate(header)
+
+    def test_rejects_empty_method(self):
+        header = 'Payment id="x", realm="api", method="", intent="charge", request="e30"'
+        with pytest.raises(ParseError, match="Invalid method"):
+            parse_www_authenticate(header)
+
+    def test_rejects_missing_request(self):
+        header = 'Payment id="x", realm="api", method="solana", intent="charge"'
+        with pytest.raises(ParseError, match="Missing 'request'"):
+            parse_www_authenticate(header)
+
+    def test_rejects_missing_realm(self):
+        header = 'Payment id="x", method="solana", intent="charge", request="e30"'
+        with pytest.raises(ParseError, match="Missing 'realm'"):
+            parse_www_authenticate(header)
+
+    def test_rejects_invalid_json_in_request(self):
+        bad_b64 = encode(b"not json")
+        header = f'Payment id="x", realm="api", method="solana", intent="charge", request="{bad_b64}"'
+        with pytest.raises(ParseError, match="Invalid JSON"):
+            parse_www_authenticate(header)
+
+    def test_rejects_duplicate_params(self):
+        header = 'Payment id="a", realm="api", method="solana", intent="charge", request="e30", id="b"'
+        with pytest.raises(ParseError, match="Duplicate"):
+            parse_www_authenticate(header)
+
+    def test_tab_after_scheme(self):
+        header = 'Payment\tid="x", realm="api", method="solana", intent="charge", request="e30"'
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == "x"
+
+    def test_rejects_no_space_after_scheme(self):
+        header = 'Paymentid="x"'
+        with pytest.raises(ParseError):
+            parse_www_authenticate(header)
+
+    def test_preserves_optional_fields(self):
+        opaque_b64 = encode_json({"nonce": "abc"})
+        header = (
+            f'Payment id="x", realm="api", method="solana", intent="charge", request="e30", '
+            f'expires="2099-01-01T00:00:00Z", description="Test payment", '
+            f'digest="sha-256=abc", opaque="{opaque_b64}"'
+        )
+        parsed = parse_www_authenticate(header)
+        assert parsed.expires == "2099-01-01T00:00:00Z"
+        assert parsed.description == "Test payment"
+        assert parsed.digest == "sha-256=abc"
+        assert parsed.opaque == opaque_b64
+
+    def test_unquoted_values(self):
+        header = "Payment id=abc123, realm=api, method=solana, intent=charge, request=e30"
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == "abc123"
+
+    def test_extra_whitespace(self):
+        header = 'Payment   id="x" ,  realm="api" ,  method="solana" ,  intent="charge" ,  request="e30"'
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == "x"
+
+    def test_format_rejects_crlf(self):
+        challenge = PaymentChallenge(id="bad\rid", realm="api", method="solana", intent="charge", request="e30")
+        with pytest.raises(ParseError, match="CRLF"):
+            format_www_authenticate(challenge)
+
+    def test_format_rejects_newline(self):
+        challenge = PaymentChallenge(id="x", realm="bad\nrealm", method="solana", intent="charge", request="e30")
+        with pytest.raises(ParseError, match="CRLF"):
+            format_www_authenticate(challenge)
+
+    def test_escapes_quotes(self):
+        challenge = PaymentChallenge(id='id"with"quotes', realm="api", method="solana", intent="charge", request="e30")
+        header = format_www_authenticate(challenge)
+        assert r"id\"with\"quotes" in header
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == 'id"with"quotes'
+
+    def test_escapes_backslashes(self):
+        challenge = PaymentChallenge(
+            id=r"id\with\backslash", realm="api", method="solana", intent="charge", request="e30"
+        )
+        header = format_www_authenticate(challenge)
+        parsed = parse_www_authenticate(header)
+        assert parsed.id == r"id\with\backslash"
+
+
+class TestAuthorization:
+    def test_roundtrip(self):
+        echo = ChallengeEcho(id="abc123", realm="api", method="solana", intent="charge", request="e30")
+        credential = PaymentCredential(
+            challenge=echo,
+            payload={"type": "transaction", "transaction": "base64tx"},
+        )
+        header = format_authorization(credential)
+        parsed = parse_authorization(header)
+        assert parsed.challenge.id == "abc123"
+        assert parsed.payload["type"] == "transaction"
+
+    def test_rejects_non_payment(self):
+        with pytest.raises(ParseError, match="Payment"):
+            parse_authorization("Bearer abc123")
+
+    def test_rejects_oversized_token(self):
+        huge = "a" * (16 * 1024 + 1)
+        with pytest.raises(ParseError, match="exceeds maximum"):
+            parse_authorization(f"Payment {huge}")
+
+    def test_rejects_invalid_base64(self):
+        with pytest.raises(ParseError):
+            parse_authorization("Payment @@@invalid@@@")
+
+    def test_rejects_invalid_json(self):
+        bad = encode(b"not json")
+        with pytest.raises(ParseError):
+            parse_authorization(f"Payment {bad}")
+
+    def test_with_source(self):
+        echo = ChallengeEcho(id="abc", realm="api", method="solana", intent="charge", request="e30")
+        credential = PaymentCredential(
+            challenge=echo,
+            payload={"sig": "abc"},
+            source="did:pkh:solana:mainnet:Abc123",
+        )
+        header = format_authorization(credential)
+        parsed = parse_authorization(header)
+        assert parsed.source == "did:pkh:solana:mainnet:Abc123"
+
+    def test_extract_from_multi_scheme(self):
+        """Should extract Payment scheme from multi-scheme Authorization header."""
+        echo = ChallengeEcho(id="test", realm="api", method="solana", intent="charge", request="e30")
+        credential = PaymentCredential(challenge=echo, payload={"type": "transaction"})
+        header = format_authorization(credential)
+        # Prefix with another scheme
+        multi = f"Bearer xyz123, {header}"
+        parsed = parse_authorization(multi)
+        assert parsed.challenge.id == "test"
+
+
+class TestReceipt:
+    def test_roundtrip(self):
+        receipt = Receipt(
+            status="success",
+            method="solana",
+            timestamp="2024-01-01T00:00:00Z",
+            reference="5UfDuX...",
+            challenge_id="ch-test",
+        )
+        header = format_receipt(receipt)
+        parsed = parse_receipt(header)
+        assert parsed.reference == "5UfDuX..."
+        assert parsed.is_success()
+        assert parsed.challenge_id == "ch-test"
+
+    def test_rejects_oversized(self):
+        huge = "a" * (16 * 1024 + 1)
+        with pytest.raises(ParseError, match="exceeds maximum"):
+            parse_receipt(huge)
+
+    def test_rejects_invalid_json(self):
+        bad = encode(b"not json")
+        with pytest.raises(ParseError):
+            parse_receipt(bad)

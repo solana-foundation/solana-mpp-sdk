@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -251,6 +252,354 @@ func TestVerifyCredentialExpiredChallengeRejected(t *testing.T) {
 	}
 	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
 		t.Fatal("expected expired challenge to fail")
+	}
+}
+
+func TestNewMissingRecipient(t *testing.T) {
+	if _, err := New(Config{SecretKey: "secret"}); err == nil {
+		t.Fatal("expected error for missing recipient")
+	}
+}
+
+func TestNewInvalidRecipientPubkey(t *testing.T) {
+	if _, err := New(Config{Recipient: "not-a-pubkey", SecretKey: "secret"}); err == nil {
+		t.Fatal("expected error for invalid recipient pubkey")
+	}
+}
+
+func TestNewMissingSecretKey(t *testing.T) {
+	t.Setenv("MPP_SECRET_KEY", "")
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	if _, err := New(Config{Recipient: recipient}); err == nil {
+		t.Fatal("expected error for missing secret key")
+	}
+}
+
+func TestNewSecretKeyFromEnv(t *testing.T) {
+	t.Setenv("MPP_SECRET_KEY", "env-secret")
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	rpcClient := testutil.NewFakeRPC()
+	handler, err := New(Config{Recipient: recipient, RPC: rpcClient})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handler.secretKey != "env-secret" {
+		t.Fatalf("expected env secret, got %q", handler.secretKey)
+	}
+}
+
+func TestChargeToken(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	handler, err := New(Config{
+		Recipient: recipient,
+		Currency:  "USDC",
+		Decimals:  6,
+		Network:   "localnet",
+		SecretKey: "test-secret",
+		RPC:       rpcClient,
+		Store:     mpp.NewMemoryStore(),
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	challenge, err := handler.Charge(context.Background(), "1.000000")
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	if challenge.Method != "solana" || challenge.Intent != "charge" {
+		t.Fatalf("unexpected challenge: %#v", challenge)
+	}
+}
+
+func TestChargeWithOptionsDescriptionAndExternalID(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, err := handler.ChargeWithOptions(context.Background(), "0.001", ChargeOptions{
+		Description: "Test Payment",
+		ExternalID:  "order-42",
+		Expires:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	if challenge.Description != "Test Payment" {
+		t.Fatalf("expected description, got %q", challenge.Description)
+	}
+	// Verify the request contains the external ID
+	var req map[string]any
+	if err := challenge.Request.Decode(&req); err != nil {
+		t.Fatalf("decode request failed: %v", err)
+	}
+	if req["externalId"] != "order-42" {
+		t.Fatalf("expected externalId in request, got %v", req["externalId"])
+	}
+}
+
+func TestVerifyCredentialMissingPayloadType(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	// Empty payload type
+	credential, err := mpp.NewPaymentCredential(challenge.ToEcho(), map[string]string{
+		"type": "",
+	})
+	if err != nil {
+		t.Fatalf("credential failed: %v", err)
+	}
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for missing payload type")
+	}
+}
+
+func TestVerifyCredentialMissingTransactionData(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	credential, err := mpp.NewPaymentCredential(challenge.ToEcho(), map[string]string{
+		"type":        "transaction",
+		"transaction": "",
+	})
+	if err != nil {
+		t.Fatalf("credential failed: %v", err)
+	}
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for missing transaction data")
+	}
+}
+
+func TestVerifyCredentialSimulationFailure(t *testing.T) {
+	handler, rpcClient, cfg := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	authHeader, err := client.BuildCredentialHeader(context.Background(), cfg.Client, rpcClient, challenge)
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	// Make simulation fail
+	rpcClient.SimulateErr = fmt.Errorf("simulation failed")
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for simulation failure")
+	}
+}
+
+func TestVerifyCredentialSendFailure(t *testing.T) {
+	handler, rpcClient, cfg := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	authHeader, err := client.BuildCredentialHeader(context.Background(), cfg.Client, rpcClient, challenge)
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	rpcClient.SendErr = fmt.Errorf("send failed")
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for send failure")
+	}
+}
+
+func TestVerifyCredentialGetTxFailure(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey()
+	clientSigner := testutil.NewPrivateKey()
+	handler, err := New(Config{
+		Recipient: recipient.PublicKey().String(),
+		Currency:  "sol",
+		Decimals:  9,
+		Network:   "localnet",
+		SecretKey: "test-secret",
+		RPC:       rpcClient,
+		Store:     mpp.NewMemoryStore(),
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	// Use push mode so verifyOnChain is called
+	authHeader, err := client.BuildCredentialHeaderWithOptions(context.Background(), clientSigner, rpcClient, challenge, client.BuildOptions{Broadcast: true})
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	// Make GetTransaction fail
+	rpcClient.GetTxErr = fmt.Errorf("transaction not found")
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for get transaction failure")
+	}
+}
+
+func TestVerifyCredentialMissingSignature(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	credential, err := mpp.NewPaymentCredential(challenge.ToEcho(), map[string]string{
+		"type":      "signature",
+		"signature": "",
+	})
+	if err != nil {
+		t.Fatalf("credential failed: %v", err)
+	}
+	if _, err := handler.VerifyCredential(context.Background(), credential); err == nil {
+		t.Fatal("expected error for missing signature")
+	}
+}
+
+func TestChargeWithFeePayer(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	feePayer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey()
+	handler, err := New(Config{
+		Recipient:      recipient.PublicKey().String(),
+		Currency:       "sol",
+		Decimals:       9,
+		Network:        "localnet",
+		SecretKey:      "test-secret",
+		RPC:            rpcClient,
+		Store:          mpp.NewMemoryStore(),
+		FeePayerSigner: feePayer,
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	challenge, err := handler.Charge(context.Background(), "0.001")
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	var req map[string]any
+	if err := challenge.Request.Decode(&req); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	md, ok := req["methodDetails"].(map[string]any)
+	if !ok {
+		t.Fatal("expected methodDetails in request")
+	}
+	if md["feePayer"] != true {
+		t.Fatal("expected feePayer=true in method details")
+	}
+	if md["feePayerKey"] != feePayer.PublicKey().String() {
+		t.Fatalf("expected feePayerKey, got %v", md["feePayerKey"])
+	}
+}
+
+func TestNewWithDefaultValues(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	handler, err := New(Config{
+		Recipient: recipient,
+		SecretKey: "test-secret",
+		RPC:       rpcClient,
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	if handler.currency != "USDC" {
+		t.Fatalf("expected default currency USDC, got %q", handler.currency)
+	}
+	if handler.decimals != 6 {
+		t.Fatalf("expected default decimals 6, got %d", handler.decimals)
+	}
+	if handler.network != "mainnet-beta" {
+		t.Fatalf("expected default network mainnet-beta, got %q", handler.network)
+	}
+}
+
+func TestVerifyCredentialTokenTransactionSuccess(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey()
+	clientSigner := testutil.NewPrivateKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+	rpcClient.MintOwners[mint.String()] = solana.TokenProgramID
+	handler, err := New(Config{
+		Recipient: recipient.PublicKey().String(),
+		Currency:  mint.String(),
+		Decimals:  6,
+		Network:   "localnet",
+		SecretKey: "test-secret",
+		RPC:       rpcClient,
+		Store:     mpp.NewMemoryStore(),
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	challenge, err := handler.Charge(context.Background(), "1.000000")
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	// Use pull mode (transaction)
+	authHeader, err := client.BuildCredentialHeader(context.Background(), clientSigner, rpcClient, challenge)
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	receipt, err := handler.VerifyCredential(context.Background(), credential)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if receipt.Status != mpp.ReceiptStatusSuccess {
+		t.Fatalf("unexpected receipt: %#v", receipt)
+	}
+}
+
+func TestVerifyCredentialSignatureSuccess(t *testing.T) {
+	handler, rpcClient, cfg := newTestMpp(t)
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	authHeader, err := client.BuildCredentialHeaderWithOptions(context.Background(), cfg.Client, rpcClient, challenge, client.BuildOptions{Broadcast: true})
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	receipt, err := handler.VerifyCredential(context.Background(), credential)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if receipt.Status != mpp.ReceiptStatusSuccess || receipt.Reference == "" {
+		t.Fatalf("unexpected receipt: %#v", receipt)
+	}
+}
+
+func TestRPCURL(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	handler, err := New(Config{
+		Recipient: recipient,
+		SecretKey: "secret",
+		Network:   "devnet",
+		RPC:       rpcClient,
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	if handler.RPCURL() != "https://api.devnet.solana.com" {
+		t.Fatalf("unexpected RPC URL: %q", handler.RPCURL())
+	}
+}
+
+func TestVerifyCredentialTransactionWithFeePayerSigner(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	recipient := testutil.NewPrivateKey()
+	feePayer := testutil.NewPrivateKey()
+	clientSigner := testutil.NewPrivateKey()
+	handler, err := New(Config{
+		Recipient:      recipient.PublicKey().String(),
+		Currency:       "sol",
+		Decimals:       9,
+		Network:        "localnet",
+		SecretKey:      "test-secret",
+		RPC:            rpcClient,
+		Store:          mpp.NewMemoryStore(),
+		FeePayerSigner: feePayer,
+	})
+	if err != nil {
+		t.Fatalf("new mpp failed: %v", err)
+	}
+	challenge, _ := handler.Charge(context.Background(), "0.001")
+	// Build a pull-mode credential (transaction type)
+	authHeader, err := client.BuildCredentialHeader(context.Background(), clientSigner, rpcClient, challenge)
+	if err != nil {
+		t.Fatalf("build credential failed: %v", err)
+	}
+	credential, _ := mpp.ParseAuthorization(authHeader)
+	receipt, err := handler.VerifyCredential(context.Background(), credential)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if receipt.Status != mpp.ReceiptStatusSuccess {
+		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 }
 

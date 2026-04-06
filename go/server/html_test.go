@@ -100,11 +100,11 @@ func TestChallengeToHTML(t *testing.T) {
 		name   string
 		substr string
 	}{
-		{"doctype", "<!DOCTYPE html>"},
+		{"doctype", "<!doctype html>"},
 		{"data element", `id="__MPP_DATA__"`},
 		{"root div", `id="root"`},
 		{"challenge ID", challenge.ID},
-		{"payment UI script", "<script>"},
+		{"script tag", "<script"},
 	}
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {
@@ -112,22 +112,6 @@ func TestChallengeToHTML(t *testing.T) {
 				t.Fatalf("expected HTML to contain %q", c.substr)
 			}
 		})
-	}
-
-	// The challenge JSON in the <pre> block must be HTML-escaped so that
-	// any markup inside field values cannot break out of the display area.
-	// The description "Test payment" is safe, but the escaped challenge JSON
-	// section should not contain unescaped angle brackets from field values.
-	preStart := strings.Index(html, "<pre>")
-	preEnd := strings.Index(html, "</pre>")
-	if preStart < 0 || preEnd < 0 {
-		t.Fatal("expected <pre> block in HTML")
-	}
-	preContent := html[preStart+5 : preEnd]
-	// The pre content is the HTML-escaped challenge JSON; it should not
-	// contain raw < or > (they should all be escaped as &lt; / &gt;).
-	if strings.ContainsAny(preContent, "<>") {
-		t.Fatal("expected challenge JSON in <pre> to be fully HTML-escaped")
 	}
 }
 
@@ -151,7 +135,7 @@ func TestHTMLEnabled(t *testing.T) {
 	}
 }
 
-func TestChallengeToHTMLTestMode(t *testing.T) {
+func TestChallengeToHTMLNetwork(t *testing.T) {
 	handler := newHTMLTestMpp(t)
 	challenge, err := handler.Charge(context.Background(), "1.00")
 	if err != nil {
@@ -163,8 +147,8 @@ func TestChallengeToHTMLTestMode(t *testing.T) {
 		t.Fatalf("ChallengeToHTML failed: %v", err)
 	}
 
-	if !strings.Contains(html, `"testMode":true`) {
-		t.Fatal("expected embedded JSON to contain \"testMode\":true for devnet")
+	if !strings.Contains(html, `"network":"devnet"`) {
+		t.Fatal("expected embedded JSON to contain network field")
 	}
 }
 
