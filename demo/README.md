@@ -57,12 +57,27 @@ All optional — the server auto-generates everything it needs at startup.
 | `RECIPIENT`     | (generated) | Solana pubkey that receives payments               |
 | `FEE_PAYER_KEY` | (generated) | Base58 keypair for fee sponsorship                 |
 | `MPP_SECRET_KEY`| (generated) | HMAC key for signing 402 challenges                |
-| `NETWORK`       | `devnet`    | `devnet` or `mainnet-beta`                         |
+| `NETWORK`       | `localnet`  | `localnet`, `devnet`, or `mainnet-beta`            |
+| `RPC_URL`       | (auto)      | Custom RPC endpoint (defaults to network default)  |
 | `PORT`          | `3000`      | Server port                                        |
 
-> Both the recipient and fee payer are auto-generated and funded via Surfpool's
-> `surfnet_setAccount` cheatcode. No manual setup needed — just start Surfpool
-> and run the demo.
+> On **localnet**, both the recipient and fee payer are auto-generated and funded
+> via Surfpool's `surfnet_setAccount` cheatcode. No manual setup needed — just
+> start Surfpool and run the demo.
+
+### Running on mainnet
+
+```bash
+RECIPIENT=<your-wallet-address> \
+NETWORK=mainnet-beta \
+RPC_URL=https://mainnet.helius-rpc.com/?api-key=<your-key> \
+npm run demo:server
+```
+
+On mainnet, fee payer mode is disabled (the generated fee payer has no SOL).
+The user's wallet pays transaction fees directly. The payment link page
+shows "Continue with Solana" — clicking it connects to Phantom, Solflare,
+or any Wallet Standard-compatible wallet.
 
 ## API Endpoints
 
@@ -75,6 +90,7 @@ on behalf of clients. Clients only pay the transfer amount.
 | GET    | `/api/v1/stocks/search?q=`        | 0.01 USDC  |
 | GET    | `/api/v1/stocks/history/:symbol`  | 0.05 USDC  |
 | GET    | `/api/v1/weather/:city`           | 0.01 USDC  |
+| GET    | `/api/v1/fortune`                 | 0.01 USDC (payment link) |
 | GET    | `/api/v1/faucet/status`           | Free       |
 | POST   | `/api/v1/faucet/airdrop`          | Free       |
 

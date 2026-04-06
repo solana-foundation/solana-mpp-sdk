@@ -1,74 +1,44 @@
-"""HTML payment page and service worker helpers."""
+"""HTML payment page and service worker helpers.
+
+Uses the mppx-generated template (template.gen.html) for the payment page.
+The template is generated at build time by html/build.ts and contains the
+same CSS, layout, and theming as all other SDK implementations.
+"""
 
 from __future__ import annotations
 
-import html
+import html as html_mod
 import importlib.resources
 import json
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from solana_mpp._base64url import decode_json
 from solana_mpp._types import PaymentChallenge
 
 SERVICE_WORKER_PARAM = "__mpp_worker"
+
+# Known stablecoin symbols for amount display
+_KNOWN_SYMBOLS: dict[str, str] = {
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC",
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+}
 
 _TEMPLATE: str | None = None
 _SERVICE_WORKER: str | None = None
 
 
 def _load_resource(filename: str) -> str:
-    """Load a resource file from the server/html package."""
     return importlib.resources.files("solana_mpp.server.html").joinpath(filename).read_text("utf-8")
 
 
 def challenge_to_html(challenge: PaymentChallenge, rpc_url: str, network: str) -> str:
-    """Render a self-contained HTML payment page for the given challenge.
+    """Render a payment page using the mppx-generated template.
 
-    The page embeds the challenge data so that a browser can complete
-    the Solana payment flow.
+    Replaces {{AMOUNT}}, {{DESCRIPTION}}, {{EXPIRES}}, {{DATA_JSON}}
+    placeholders — same approach as the Rust and Go implementations.
     """
-    challenge_dict: dict[str, Any] = {
-        "id": challenge.id,
-        "realm": challenge.realm,
-        "method": challenge.method,
-        "intent": challenge.intent,
-        "request": challenge.request,
-    }
-    if challenge.expires:
-        challenge_dict["expires"] = challenge.expires
-    if challenge.description:
-        challenge_dict["description"] = challenge.description
-    if challenge.digest:
-        challenge_dict["digest"] = challenge.digest
-    if challenge.opaque is not None:
-        challenge_dict["opaque"] = challenge.opaque
-
-    challenge_json = json.dumps(challenge_dict, separators=(",", ":"))
-    escaped_challenge_json = html.escape(challenge_json)
-
-    test_mode = network in ("devnet", "localnet")
-
-    embedded_data = json.dumps(
-        {
-            "challenge": json.loads(challenge_json),
-            "network": network,
-            "rpcUrl": rpc_url,
-            "testMode": test_mode,
-        },
-        separators=(",", ":"),
-    )
-
-    # Build description line
-    description_line = ""
-    try:
-        request_data = challenge.decode_request()
-        desc = request_data.get("description", "")
-        if desc:
-            description_line = f'<p style="color:#4a5568;text-align:center">{html.escape(str(desc))}</p>'
-    except Exception:
-        pass
-
-    # Load payment UI JS
     global _TEMPLATE  # noqa: PLW0603
     if _TEMPLATE is None:
         try:
@@ -76,31 +46,64 @@ def challenge_to_html(challenge: PaymentChallenge, rpc_url: str, network: str) -
         except Exception:
             _TEMPLATE = ""
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Payment Required</title>
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #f7fafc; }}
-pre {{ background: #edf2f7; padding: 16px; border-radius: 8px; font-size: 13px; }}
-</style>
-</head>
-<body>
-{description_line}
-<details style="max-width:600px;margin:0 auto 20px">
-<summary style="cursor:pointer;color:#718096;font-size:14px">Challenge details</summary>
-<pre>{escaped_challenge_json}</pre>
-</details>
-<div id="root"></div>
-<script type="application/json" id="__MPP_DATA__">{embedded_data}</script>
-</body>
-</html>"""
+    # Decode request for amount display
+    try:
+        request_data: dict[str, Any] = decode_json(challenge.request)
+    except Exception:
+        request_data = {}
+
+    currency = request_data.get("currency", "SOL")
+    md = request_data.get("methodDetails", {})
+    decimals = md.get("decimals", 9 if currency.lower() == "sol" else 6)
+    amount_raw = request_data.get("amount", "0")
+    amount_f = float(amount_raw) / (10**decimals)
+    display_amount = str(int(amount_f)) if amount_f == int(amount_f) else f"{amount_f:.2f}"
+
+    sym = _KNOWN_SYMBOLS.get(currency)
+    if currency.lower() == "sol":
+        amount_display = f"{display_amount} SOL"
+    elif sym:
+        amount_display = f"${display_amount}"
+    else:
+        amount_display = f"{display_amount} {currency[:6]}"
+
+    description_html = ""
+    if challenge.description:
+        description_html = (
+            f'<p class="mppx-summary-description">{html_mod.escape(challenge.description)}</p>'
+        )
+
+    expires_html = ""
+    if challenge.expires:
+        esc_exp = html_mod.escape(challenge.expires)
+        expires_html = (
+            f'<p class="mppx-summary-expires">Expires at '
+            f'<time datetime="{esc_exp}" id="_exp">{esc_exp}</time></p>'
+            f"<script>document.getElementById('_exp').textContent="
+            f"new Date('{esc_exp}').toLocaleString()</script>"
+        )
+
+    # Build embedded data (standalone format: request stays as base64url)
+    embedded_data = json.dumps(
+        {"challenge": challenge.__dict__, "network": network, "rpcUrl": rpc_url},
+        separators=(",", ":"),
+        default=str,
+    ).replace("<", "\\u003c")
+
+    if _TEMPLATE:
+        return (
+            _TEMPLATE.replace("{{AMOUNT}}", html_mod.escape(amount_display))
+            .replace("{{DESCRIPTION}}", description_html)
+            .replace("{{EXPIRES}}", expires_html)
+            .replace("{{DATA_JSON}}", embedded_data)
+        )
+
+    # Minimal fallback (should not happen if html/build.ts ran)
+    return f"<html><body><pre>{html_mod.escape(embedded_data)}</pre></body></html>"
 
 
 def service_worker_js() -> str:
-    """Return the embedded service worker JavaScript content."""
+    """Return the mppx service worker JavaScript content."""
     global _SERVICE_WORKER  # noqa: PLW0603
     if _SERVICE_WORKER is None:
         try:

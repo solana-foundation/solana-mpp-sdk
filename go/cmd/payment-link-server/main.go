@@ -77,7 +77,9 @@ func main() {
 			return
 		}
 
-		challenge, err := m.Charge(r.Context(), "0.01")
+		challenge, err := m.ChargeWithOptions(r.Context(), "0.01", server.ChargeOptions{
+			Description: "Open a fortune cookie",
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

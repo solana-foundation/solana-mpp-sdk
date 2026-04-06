@@ -122,13 +122,16 @@ class Mpp:
 
         request_b64 = encode_json(request_obj)
 
+        from solana_mpp._expires import minutes
+
+        default_expires = minutes(5)
         return PaymentChallenge.with_secret_key(
             secret_key=self._secret_key,
             realm=self._realm,
             method="solana",
             intent="charge",
             request=request_b64,
-            expires=options.expires,
+            expires=options.expires or default_expires,
             description=options.description,
         )
 

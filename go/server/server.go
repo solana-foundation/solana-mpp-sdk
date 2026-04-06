@@ -154,13 +154,17 @@ func (m *Mpp) ChargeWithOptions(ctx context.Context, amount string, options Char
 	if err != nil {
 		return mpp.PaymentChallenge{}, err
 	}
+	expires := options.Expires
+	if expires == "" {
+		expires = mpp.Minutes(5)
+	}
 	return mpp.NewChallengeWithSecretFull(
 		m.secretKey,
 		m.realm,
 		mpp.NewMethodName("solana"),
 		mpp.NewIntentName("charge"),
 		request,
-		options.Expires,
+		expires,
 		"",
 		options.Description,
 		nil,

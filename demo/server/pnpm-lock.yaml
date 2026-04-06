@@ -12,8 +12,8 @@ importers:
         specifier: ^6.4.0
         version: 6.5.0(typescript@5.9.3)
       '@solana/mpp':
-        specifier: file:../..
-        version: file:../..(@solana/kit@6.5.0(typescript@5.9.3))(mppx@0.3.16(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)))
+        specifier: file:../../typescript/packages/mpp
+        version: file:../../typescript/packages/mpp(@solana/kit@6.5.0(typescript@5.9.3))(mppx@0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)))
       cors:
         specifier: ^2.8.5
         version: 2.8.6
@@ -21,8 +21,8 @@ importers:
         specifier: ^5.0.0
         version: 5.2.1
       mppx:
-        specifier: ^0.3.15
-        version: 0.3.16(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6))
+        specifier: ^0.5.5
+        version: 0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6))
       yahoo-finance2:
         specifier: ^3.13.2
         version: 3.13.2
@@ -299,11 +299,6 @@ packages:
     peerDependencies:
       '@solana/kit': ^6.3.0
 
-  '@solana-program/system@0.11.0':
-    resolution: {integrity: sha512-SJeQVTkqGZzIXd7XHlCxnfpKpvPZghB1IFwddPPG04ydVXtDLRWp9wLoTR5Prkl9FIWRe/c5VgT4nxyzW1cAuQ==}
-    peerDependencies:
-      '@solana/kit': ^6.0.0
-
   '@solana-program/system@0.12.0':
     resolution: {integrity: sha512-ZnAAWeGVMWNtJhw3GdifI2HnhZ0A0H0qs8tBkcFvxp/8wIavvO+GOM4Jd0N22u2+Lni2zcwvcrxrsxj6Mjphng==}
     peerDependencies:
@@ -453,16 +448,11 @@ packages:
       typescript:
         optional: true
 
-  '@solana/mpp@file:../..':
-    resolution: {directory: ../.., type: directory}
-    engines: {node: '>=18'}
+  '@solana/mpp@file:../../typescript/packages/mpp':
+    resolution: {directory: ../../typescript/packages/mpp, type: directory}
     peerDependencies:
       '@solana/kit': '>=6.5.0'
-      '@swig-wallet/kit': '>=1.7.0'
-      mppx: '>=0.3.15'
-    peerDependenciesMeta:
-      '@swig-wallet/kit':
-        optional: true
+      mppx: '>=0.5.5'
 
   '@solana/nominal-types@6.5.0':
     resolution: {integrity: sha512-HngIM2nlaDPXk0EDX0PklFqpjGDKuOFnlEKS0bfr2F9CorFwiNhNjhb9lPH+FdgsogD1wJ8wgLMMk1LZWn5kgQ==}
@@ -1052,15 +1042,15 @@ packages:
     resolution: {integrity: sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A==}
     engines: {node: '>=18'}
 
-  mppx@0.3.16:
-    resolution: {integrity: sha512-6YdyEJqCyMeGwXdf//A/bTtlSLm7fCxtgrR5wJehOW3QeX4BoexJRrznKkJ+y/quCZ5rm/2ulhYp4Va/mwXwNA==}
+  mppx@0.5.5:
+    resolution: {integrity: sha512-HKGlnnLpRu6zXZCY17rbZNUC786aook9R5Eul5aafePAigpfK8ytlZ68QeRr11J21iR6je6rIztTk46qKcV79Q==}
     hasBin: true
     peerDependencies:
       '@modelcontextprotocol/sdk': '>=1.25.0'
       elysia: '>=1'
       express: '>=5'
       hono: '>=4'
-      viem: '>=2.46.2'
+      viem: '>=2.47.5'
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
@@ -1100,16 +1090,16 @@ packages:
   openapi-types@12.1.3:
     resolution: {integrity: sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw==}
 
-  ox@0.12.4:
-    resolution: {integrity: sha512-+P+C7QzuwPV8lu79dOwjBKfB2CbnbEXe/hfyyrff1drrO1nOOj3Hc87svHfcW1yneRr3WXaKr6nz11nq+/DF9Q==}
+  ox@0.14.5:
+    resolution: {integrity: sha512-HgmHmBveYO40H/R3K6TMrwYtHsx/u6TAB+GpZlgJCoW0Sq5Ttpjih0IZZiwGQw7T6vdW4IAyobYrE2mdAvyF8Q==}
     peerDependencies:
       typescript: '>=5.4.0'
     peerDependenciesMeta:
       typescript:
         optional: true
 
-  ox@0.14.5:
-    resolution: {integrity: sha512-HgmHmBveYO40H/R3K6TMrwYtHsx/u6TAB+GpZlgJCoW0Sq5Ttpjih0IZZiwGQw7T6vdW4IAyobYrE2mdAvyF8Q==}
+  ox@0.14.7:
+    resolution: {integrity: sha512-zSQ/cfBdolj7U4++NAvH7sI+VG0T3pEohITCgcQj8KlawvTDY4vGVhDT64Atsm0d6adWfIYHDpu88iUBMMp+AQ==}
     peerDependencies:
       typescript: '>=5.4.0'
     peerDependenciesMeta:
@@ -1535,10 +1525,6 @@ snapshots:
     dependencies:
       '@solana/kit': 6.5.0(typescript@5.9.3)
 
-  '@solana-program/system@0.11.0(@solana/kit@6.5.0(typescript@5.9.3))':
-    dependencies:
-      '@solana/kit': 6.5.0(typescript@5.9.3)
-
   '@solana-program/system@0.12.0(@solana/kit@6.5.0(typescript@5.9.3))':
     dependencies:
       '@solana/kit': 6.5.0(typescript@5.9.3)
@@ -1700,13 +1686,13 @@ snapshots:
       - fastestsmallesttextencoderdecoder
       - utf-8-validate
 
-  '@solana/mpp@file:../..(@solana/kit@6.5.0(typescript@5.9.3))(mppx@0.3.16(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)))':
+  '@solana/mpp@file:../../typescript/packages/mpp(@solana/kit@6.5.0(typescript@5.9.3))(mppx@0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)))':
     dependencies:
       '@solana-program/compute-budget': 0.15.0(@solana/kit@6.5.0(typescript@5.9.3))
-      '@solana-program/system': 0.11.0(@solana/kit@6.5.0(typescript@5.9.3))
+      '@solana-program/system': 0.12.0(@solana/kit@6.5.0(typescript@5.9.3))
       '@solana-program/token': 0.11.0(@solana/kit@6.5.0(typescript@5.9.3))
       '@solana/kit': 6.5.0(typescript@5.9.3)
-      mppx: 0.3.16(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6))
+      mppx: 0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6))
 
   '@solana/nominal-types@6.5.0(typescript@5.9.3)':
     optionalDependencies:
@@ -2395,12 +2381,12 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
-  mppx@0.3.16(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)):
+  mppx@0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(typescript@5.9.3)(zod@4.3.6)):
     dependencies:
       '@remix-run/fetch-proxy': 0.7.1
       '@remix-run/node-fetch-server': 0.13.0
       incur: 0.3.5(openapi-types@12.1.3)
-      ox: 0.12.4(typescript@5.9.3)(zod@4.3.6)
+      ox: 0.14.7(typescript@5.9.3)(zod@4.3.6)
       viem: 2.47.5(typescript@5.9.3)(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
@@ -2433,7 +2419,7 @@ snapshots:
 
   openapi-types@12.1.3: {}
 
-  ox@0.12.4(typescript@5.9.3)(zod@4.3.6):
+  ox@0.14.5(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0
@@ -2448,7 +2434,7 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  ox@0.14.5(typescript@5.9.3)(zod@4.3.6):
+  ox@0.14.7(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0

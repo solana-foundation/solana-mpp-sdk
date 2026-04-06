@@ -66,7 +66,7 @@ async function main() {
   const theme = Html.mergeDefined({
     favicon: undefined,
     fontUrl: undefined,
-    logo: { dark: 'https://solana.com/favicon.ico', light: 'https://solana.com/favicon.ico' },
+    logo: { dark: 'https://solana.com/src/img/branding/solanaLogoMark.svg', light: 'https://solana.com/src/img/branding/solanaLogoMark.svg' },
     ...Html.defaultTheme,
   }, {});
   const text = Html.sanitizeRecord(Html.mergeDefined(Html.defaultText, {}));
@@ -102,6 +102,10 @@ async function main() {
 
   // Also generate the service worker content from mppx
   const mppxServiceWorker = serviceWorkerContent;
+
+  // Write the shared template + service worker to html/dist/ (canonical location)
+  writeFileSync(resolve(outDir, 'template.html'), htmlTemplate);
+  writeFileSync(resolve(outDir, 'service-worker.js'), mppxServiceWorker);
 
   console.log(`  html-template.html (${(htmlTemplate.length / 1024).toFixed(1)} KB)`);
 

@@ -5,6 +5,7 @@ import { Method, Receipt, Store } from 'mppx';
 import { DEFAULT_RPC_URLS, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from '../constants.js';
 import * as Methods from '../Methods.js';
 import { coSignBase64Transaction } from '../utils/transactions.js';
+import { PAYMENT_UI_JS } from './html-assets.gen.js';
 
 /**
  * Creates a Solana `charge` method for usage on the server.
@@ -45,6 +46,7 @@ export function charge(parameters: charge.Parameters) {
         recipient,
         currency,
         decimals,
+        html: htmlEnabled = false,
         tokenProgram = TOKEN_PROGRAM,
         network = 'mainnet-beta',
         store = Store.memory(),
@@ -70,12 +72,43 @@ export function charge(parameters: charge.Parameters) {
         );
     }
 
-    return Method.toServer(Methods.charge, {
+    // Known currency display names for the payment page amount formatting.
+    const KNOWN_SYMBOLS: Record<string, string> = {
+        '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo': 'PYUSD',
+        '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU': 'USDC',
+        EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC',
+        Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: 'USDT',
+    };
+
+    const method = Method.toServer(Methods.charge, {
         defaults: {
             currency: currency ?? 'sol',
             methodDetails: {},
             recipient: '',
         },
+
+        html: htmlEnabled
+            ? {
+                  config: {},
+                  content: PAYMENT_UI_JS as string,
+                  formatAmount: (request: { amount: string; currency: string }) => {
+                      const dec = decimals ?? (request.currency.toLowerCase() === 'sol' ? 9 : 6);
+                      const raw = Number(request.amount) / 10 ** dec;
+                      const display = raw % 1 === 0 ? raw.toString() : raw.toFixed(Math.min(dec, 2));
+                      if (request.currency.toLowerCase() === 'sol') return `${display} SOL`;
+                      const sym = KNOWN_SYMBOLS[request.currency];
+                      if (sym) return `$${display}`;
+                      return `${display} ${request.currency.slice(0, 6)}`;
+                  },
+                  text: undefined,
+                  theme: {
+                      logo: {
+                          dark: 'https://solana.com/src/img/branding/solanaLogoMark.svg',
+                          light: 'https://solana.com/src/img/branding/solanaLogoMark.svg',
+                      },
+                  },
+              }
+            : undefined,
 
         async request({ credential, request }) {
             if (credential) {
@@ -131,6 +164,8 @@ export function charge(parameters: charge.Parameters) {
             return await verifySignature(cred, challenge, rpcUrl, recipient, store);
         },
     });
+
+    return method;
 }
 
 // ── Payload type resolution ──
@@ -509,6 +544,25 @@ export declare namespace charge {
         currency?: string;
         /** Token decimals (required when currency is a mint address). */
         decimals?: number;
+        /**
+         * Enable HTML payment link pages for browser requests.
+         * When true, 402 responses for requests with `Accept: text/html`
+         * will return an interactive payment page instead of JSON.
+         *
+         * Usage is seamless — just set `html: true` and `result.challenge`
+         * automatically returns HTML for browsers:
+         *
+         * ```ts
+         * const mppx = Mppx.create({
+         *   methods: [solana.charge({ recipient, html: true, ... })],
+         * })
+         *
+         * // In your handler:
+         * const result = await mppx.charge({ amount: '10000' })(request)
+         * if (result.status === 402) return result.challenge  // HTML for browsers, JSON for APIs
+         * ```
+         */
+        html?: boolean;
         /** Solana network. Defaults to 'mainnet-beta'. */
         network?: 'devnet' | 'localnet' | 'mainnet-beta' | (string & {});
         /** Base58-encoded recipient public key that receives payments. */

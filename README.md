@@ -11,65 +11,89 @@ Solana payment method for the [Machine Payments Protocol](https://mpp.dev).
 > [!IMPORTANT]
 > This repository is under active development. The [Solana MPP spec](https://github.com/tempoxyz/mpp-specs/pull/188) is not yet finalized — APIs and wire formats are subject to change.
 
+## SDK Implementations
+
+The Solana MPP SDK is available in 5 languages. Every implementation follows the same protocol and is tested for cross-language interoperability.
+
+| | TypeScript | Rust | Go | Python | Lua |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Package** | `@solana/mpp` | `solana-mpp` | `go get` | `solana-mpp` | `mpp` |
+| **Server (charge)** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Client (auto-402)** | ✅ | ✅ | ✅ | ✅ | — |
+| **Payment links** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Fee sponsorship** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Split payments** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **SPL tokens** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Token-2022** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **HTTP middleware** | via mppx | — | ✅ | ✅ (`@pay`) | Kong plugin |
+| **Replay protection** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Realm auto-detection** | — | — | ✅ | ✅ | — |
+| **Session (pay-as-you-go)** | ✅ | — | — | — | — |
+
+### Testing
+
+Every implementation is validated at three levels:
+
+1. **Unit tests** — each SDK has its own test suite with coverage enforcement
+2. **E2E payment tests** — Playwright browser tests verify the full payment link flow (wallet → transaction → service worker → on-chain verification) against Surfpool
+3. **Cross-language interop** — a shared Python test suite runs the same protocol conformance tests against every server implementation, proving that any client can pay any server
+
+The interop matrix tests a Python client against Rust, Go, Python, and Lua servers — each running the same Surfpool instance. This catches protocol divergences that per-language unit tests miss.
+
+```
+                    ┌──────────────┐
+                    │ Python Client│
+                    │  (pytest +   │
+                    │   solders)   │
+                    └──────┬───────┘
+                           │
+          ┌────────────────┼────────────────┐────────────────┐
+          ▼                ▼                ▼                ▼
+   ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐
+   │    Rust    │   │     Go     │   │    Lua     │   │   Python   │
+   │   :3001    │   │   :3002    │   │   :3003    │   │   :3004    │
+   └─────┬──────┘   └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
+         └────────────────┴────────────────┴────────────────┘
+                           │
+                    ┌──────┴───────┐
+                    │   Surfpool   │
+                    │    :8899     │
+                    └──────────────┘
+```
+
+### Coverage
+
+| Language | Coverage | Tests |
+|----------|----------|-------|
+| TypeScript | ![TS](https://img.shields.io/badge/coverage-67_tests-blue) | `just ts-test` |
+| Rust | ![Rust](https://img.shields.io/badge/coverage-271_tests-blue) | `just rs-test` |
+| Go | ![Go](https://img.shields.io/badge/coverage-84%25-green) | `just go-test` |
+| Python | ![Python](https://img.shields.io/badge/coverage-87%25-green) | `just py-test` |
+| Lua | ![Lua](https://img.shields.io/badge/coverage-41_tests-blue) | `just lua-test` |
+| Interop | ![Interop](https://img.shields.io/badge/interop-20_tests_×_4_servers-brightgreen) | `pytest tests/interop/` |
+
 ## Install
 
 ```bash
+# TypeScript
 pnpm add @solana/mpp
+
+# Rust
+cargo add solana-mpp
+
+# Go
+go get github.com/solana-foundation/mpp-sdk/go
+
+# Python
+pip install solana-mpp
 ```
-
-## Features
-
-**Charge** (one-time payments)
-- Native SOL and SPL token transfers (USDC, PYUSD, Token-2022, etc.)
-- Two settlement modes: pull (`type="transaction"`, default) and push (`type="signature"`)
-- Fee sponsorship: server pays transaction fees on behalf of clients
-- Split payments: send one charge to multiple recipients in a single transaction
-- Replay protection via consumed transaction signatures
-
-**General**
-- Works with [ConnectorKit](https://www.connectorkit.dev), `@solana/kit` keypair signers, and [Solana Keychain](https://github.com/solana-foundation/solana-keychain) remote signers
-- Server pre-fetches `recentBlockhash` to save client an RPC round-trip
-- Transaction simulation before broadcast to prevent wasted fees
-- Optional `tokenProgram` hint; clients resolve the mint owner and fail closed if discovery fails
-
-## Architecture
-
-```
-mpp-sdk/
-├── typescript/                    # TypeScript SDK
-│   └── packages/mpp/src/
-│       ├── Methods.ts             # Shared charge + session schemas
-│       ├── constants.ts           # Token programs, USDC mints, RPC URLs
-│       ├── server/
-│       │   ├── Charge.ts          # Server: challenge, verify, broadcast
-│       │   └── Session.ts         # Server: session channel management
-│       ├── client/
-│       │   ├── Charge.ts          # Client: build tx, sign, send
-│       │   └── Session.ts         # Client: session lifecycle
-│       └── session/
-│           ├── Types.ts           # Session types and interfaces
-│           ├── Voucher.ts         # Voucher signing and verification
-│           ├── ChannelStore.ts    # Persistent channel state
-│           └── authorizers/       # Pluggable authorization strategies
-├── rust/                          # Rust SDK
-│   └── src/lib.rs
-├── go/                            # Go SDK
-│   ├── client/                    # Client: build tx, sign, optional broadcast
-│   ├── server/                    # Server: challenge, verify, broadcast
-│   └── protocol/                  # Shared headers, challenge types, charge schema
-└── demo/                          # Interactive playground
-```
-
-**Exports:**
-- `@solana/mpp` — shared schemas, session types, and authorizers only
-- `@solana/mpp/server` — server-side charge + session, `Mppx`, `Store`
-- `@solana/mpp/client` — client-side charge + session, `Mppx`
 
 ## Quick Start
 
-### Charge (one-time payment)
+### Server (charge)
 
-**Server:**
+<details>
+<summary>TypeScript</summary>
 
 ```ts
 import { Mppx, solana } from '@solana/mpp/server'
@@ -81,100 +105,119 @@ const mppx = Mppx.create({
       recipient: 'RecipientPubkey...',
       currency: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
       decimals: 6,
+      html: true, // enables payment links for browsers
     }),
   ],
 })
 
 const result = await mppx.charge({
-  amount: '1000000', // 1 USDC
+  amount: '1000000',
   currency: 'USDC',
 })(request)
 
 if (result.status === 402) return result.challenge
 return result.withReceipt(Response.json({ data: '...' }))
 ```
+</details>
 
-**Client:**
+<details>
+<summary>Python</summary>
 
-```ts
-import { Mppx, solana } from '@solana/mpp/client'
+```python
+from solana_mpp.server import Mpp, Config
 
-const mppx = Mppx.create({
-  methods: [solana.charge({ signer })], // any TransactionSigner
+mpp = Mpp(Config(
+    recipient="RecipientPubkey...",
+    currency="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    decimals=6,
+    html=True,
+))
+
+challenge = mpp.charge("1.00")  # 1 USDC
+receipt = await mpp.verify_credential(credential)
+```
+</details>
+
+<details>
+<summary>Go</summary>
+
+```go
+import "github.com/solana-foundation/mpp-sdk/go/server"
+
+m, _ := server.New(server.Config{
+    Recipient: "RecipientPubkey...",
+    Currency:  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    Decimals:  6,
+    HTML:      true,
 })
 
-const response = await mppx.fetch('https://api.example.com/paid-endpoint')
+challenge, _ := m.Charge(ctx, "1.00")
+receipt, _ := m.VerifyCredential(ctx, credential)
+```
+</details>
+
+<details>
+<summary>Rust</summary>
+
+```rust
+use solana_mpp::server::{Config, Mpp};
+
+let mpp = Mpp::new(Config {
+    recipient: "RecipientPubkey...".into(),
+    currency: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into(),
+    decimals: 6,
+    html: true,
+    ..Default::default()
+})?;
+
+let challenge = mpp.charge("1.00")?;
+let receipt = mpp.verify_credential(&credential).await?;
+```
+</details>
+
+### Payment Links
+
+Set `html: true` on `solana.charge()` and any endpoint becomes a shareable payment link. Browsers see a payment page; API clients get the standard `402` flow.
+
+```
+Open http://localhost:3000/api/v1/fortune in a browser
+→ Payment page with "Continue with Solana" button
+→ Click → wallet signs → transaction confirmed on-chain
+→ Page reloads with the paid content
 ```
 
-### Fee Sponsorship (charge)
+See the [payment links guide](https://mpp.dev/guides/payment-links) for framework-specific setup.
+
+### Fee Sponsorship
 
 The server can pay transaction fees on behalf of clients:
 
 ```ts
-// Server — pass a TransactionPartialSigner to cover fees
 solana.charge({
   recipient: '...',
   signer: feePayerSigner, // KeyPairSigner, Keychain SolanaSigner, etc.
 })
-
-// Client — no changes needed, fee payer is handled automatically
 ```
 
-## How It Works
+### Split Payments
 
-### Charge Flow
-
-1. Client requests a resource
-2. Server returns **402 Payment Required** with a challenge (`recipient`, `amount`, `currency`, optional `tokenProgram`, optional `recentBlockhash`)
-3. Client builds and signs a Solana transfer transaction
-4. Server simulates, broadcasts, confirms on-chain, and verifies the transfer
-5. Server returns the resource with a `Payment-Receipt` header
-
-With fee sponsorship, the client partially signs (transfer authority only) and the server co-signs as fee payer before broadcasting.
-
-### Splits (charge)
-
-Use `splits` when one charge should pay multiple recipients in the same asset.
-The top-level `amount` is the total paid. The primary `recipient` receives
-`amount - sum(splits)`, and each split recipient receives its own `amount`.
+Send one charge to multiple recipients in the same asset:
 
 ```ts
-import { Mppx, solana } from '@solana/mpp/server'
-
-const mppx = Mppx.create({
-  secretKey: process.env.MPP_SECRET_KEY,
-  methods: [
-    solana.charge({
-      recipient: 'SellerPubkey...',
-      currency: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      decimals: 6,
-      splits: [
-        { recipient: 'PlatformPubkey...', amount: '50000', memo: 'platform fee' },
-        { recipient: 'ReferrerPubkey...', amount: '20000', memo: 'referral fee' },
-      ],
-    }),
+solana.charge({
+  recipient: 'SellerPubkey...',
+  currency: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  decimals: 6,
+  splits: [
+    { recipient: 'PlatformPubkey...', amount: '50000', memo: 'platform fee' },
+    { recipient: 'ReferrerPubkey...', amount: '20000', memo: 'referral fee' },
   ],
 })
-
-const result = await mppx.charge({
-  amount: '1000000', // total: 1.00 USDC
-  currency: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-})(request)
 ```
-
-In this example:
-- seller receives `930000`
-- platform receives `50000`
-- referrer receives `20000`
-
-The same `splits` shape works for native SOL charges.
 
 ## Demo
 
 An interactive playground with a React frontend and Express backend, running against [Surfpool](https://surfpool.run).
-
-- Charge flow demo: `http://localhost:5173/charges`
-- Session flow demo: `http://localhost:5173/sessions`
 
 ```bash
 surfpool start
@@ -188,32 +231,25 @@ See [demo/README.md](demo/README.md) for full details.
 ## Development
 
 ```bash
-# TypeScript
-cd typescript && pnpm install
-
-just ts-fmt              # Format and lint
-just ts-build            # Build
-just ts-test             # Unit tests (charge + session, no network)
-just ts-test-integration # Integration tests (requires Surfpool)
-
-# Rust
-cd rust && cargo build
-
-# Go
-cd go && go test ./...
-
-# Everything
-just build            # Build both
-just test             # Test both
+just build            # Build all SDKs (html → ts → rust → go)
+just test             # Test all SDKs
 just pre-commit       # Full pre-commit checks
+
+# Per-language
+just ts-test          # TypeScript tests
+just rs-test          # Rust tests
+just go-test          # Go tests
+just py-test          # Python tests
+just lua-test         # Lua tests
+
+# Integration
+just html-build       # Build payment link assets
+just html-test-e2e    # Playwright E2E tests
 ```
 
 ## Spec
 
 This SDK implements the [Solana Charge Intent](https://github.com/tempoxyz/mpp-specs/pull/188) for the [HTTP Payment Authentication Scheme](https://paymentauth.org).
-
-Session method docs and implementation notes are intentionally kept out of this
-README for now. See [docs/methods/sessions.md](docs/methods/sessions.md).
 
 ## License
 

@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const paymentUiJs = readFileSync(resolve(ROOT, 'html/dist/payment-ui.js'), 'utf8');
+// Shared mppx-generated template + service worker from html/dist/ (canonical location)
+const htmlTemplate = readFileSync(resolve(ROOT, 'html/dist/template.html'), 'utf8');
 const serviceWorkerJs = readFileSync(resolve(ROOT, 'html/dist/service-worker.js'), 'utf8');
 
 const PORT = parseInt(process.env.PORT ?? '3003', 10);
@@ -63,28 +64,21 @@ function htmlEscape(s) {
 }
 
 function renderPage(challenge) {
-  const embedded = JSON.stringify({ challenge, network: 'localnet', rpcUrl: RPC_URL, testMode: true });
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Payment Required</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; background: #f7fafc; color: #1a202c; }
-pre { background: #edf2f7; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; max-width: 600px; margin: 20px auto; }
-</style>
-</head>
-<body>
-<details style="max-width:600px;margin:0 auto 20px">
-<summary style="cursor:pointer;color:#718096;font-size:14px">Challenge details</summary>
-<pre>${htmlEscape(JSON.stringify(challenge, null, 2))}</pre>
-</details>
-<div id="root"></div>
-<script type="application/json" id="__MPP_DATA__">${embedded}</script>
-<script>${paymentUiJs}</script>
-</body>
-</html>`;
+  const request = JSON.parse(Buffer.from(challenge.request, 'base64url').toString());
+  const decimals = request.methodDetails?.decimals ?? 6;
+  const raw = Number(request.amount) / 10 ** decimals;
+  const amountDisplay = `$${raw % 1 === 0 ? raw : raw.toFixed(2)}`;
+  const descHtml = challenge.description
+    ? `<p class="mppx-summary-description">${htmlEscape(challenge.description)}</p>` : '';
+  const expiresHtml = challenge.expires
+    ? `<p class="mppx-summary-expires">Expires at <time datetime="${htmlEscape(challenge.expires)}" id="_exp">${htmlEscape(challenge.expires)}</time></p><script>document.getElementById('_exp').textContent=new Date('${htmlEscape(challenge.expires)}').toLocaleString()</script>` : '';
+  const dataJson = JSON.stringify({ challenge, network: 'localnet', rpcUrl: RPC_URL }).replace(/</g, '\\u003c');
+
+  return htmlTemplate
+    .replace('{{AMOUNT}}', htmlEscape(amountDisplay))
+    .replace('{{DESCRIPTION}}', descHtml)
+    .replace('{{EXPIRES}}', expiresHtml)
+    .replace('{{DATA_JSON}}', dataJson);
 }
 
 // Parse credential from Authorization header and broadcast the transaction.

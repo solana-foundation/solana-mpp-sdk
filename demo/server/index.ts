@@ -15,6 +15,7 @@ import { registerStocks } from './modules/stocks.js'
 import { registerWeather } from './modules/weather.js'
 import { registerFaucet } from './modules/faucet.js'
 import { registerMarketplace } from './modules/marketplace.js'
+import { registerPaymentLink } from './modules/paymentlink.js'
 
 // Recipient is the address that receives payments.
 // If not provided, generate one automatically (demo convenience).
@@ -102,6 +103,7 @@ registerStocks(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 registerWeather(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 registerFaucet(app, NETWORK)
 registerMarketplace(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
+registerPaymentLink(app, RECIPIENT, NETWORK, SECRET_KEY, feePayerSigner)
 
 // Serve SPA in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -140,6 +142,7 @@ app.listen(PORT, () => {
     { method: 'GET',  path: '/api/v1/marketplace/buy/:id',    cost: 'varies (splits: seller + platform 5% + referral 2%)' },
     { method: 'POST', path: '/api/v1/faucet/airdrop',         cost: '' },
     { method: 'GET',  path: '/api/v1/faucet/status',           cost: '' },
+    { method: 'GET',  path: '/api/v1/fortune',                 cost: '0.01 USDC (payment link!)' },
   ]
   const maxMethod = Math.max(...endpoints.map(e => e.method.length))
   const maxPath = Math.max(...endpoints.map(e => e.path.length))
