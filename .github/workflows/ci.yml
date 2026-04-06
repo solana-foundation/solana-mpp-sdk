@@ -149,9 +149,9 @@ jobs:
           npm run build
       - name: Verify committed gen files are up to date
         run: |
-          if ! git diff --quiet -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/; then
+          if ! git diff --quiet -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/ python/src/solana_mpp/server/html/; then
             echo "::error::Generated files are out of date. Run 'just html-build' and commit the results."
-            git diff --stat -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/
+            git diff --stat -- rust/src/server/html/ go/server/html/ lua/mpp/server/html_assets/ python/src/solana_mpp/server/html/
             exit 1
           fi
       - name: Upload HTML build artifacts
@@ -163,6 +163,7 @@ jobs:
             rust/src/server/html/
             go/server/html/
             lua/mpp/server/html_assets/
+            python/src/solana_mpp/server/html/
             typescript/packages/mpp/src/server/html-assets.gen.ts
 
   test-rust:
@@ -212,6 +213,29 @@ jobs:
           name: surfpool-reports-rust
           path: rust/target/surfpool-reports/
           if-no-files-found: ignore
+
+  test-go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Run tests with coverage
+        working-directory: go
+        env:
+          GOCACHE: /tmp/go-build-cache
+        run: |
+          go test ./... -coverprofile=coverage.out -covermode=atomic
+          ./scripts/check_coverage.sh coverage.out 70
+      - name: Upload Go coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: go/coverage.out
 
   integration:
     name: Integration tests
@@ -370,10 +394,87 @@ jobs:
         working-directory: html
         run: npm run test:e2e:rust
 
-  # TODO: Enable Go and Lua E2E tests once Go/Lua SDKs are in the CI build matrix
-  # test-payment-links-go:
-  #   name: "Payment links E2E: Go"
-  #   ...
-  # test-payment-links-lua:
-  #   name: "Payment links E2E: Lua"
-  #   ...
+  interop:
+    name: "Interop: Python → ${{ matrix.server }}"
+    needs: build-html
+    runs-on: ubuntu-latest
+    services:
+      surfpool:
+        image: surfpool/surfpool:latest
+        ports:
+          - 8899:8899
+          - 8900:8900
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - server: rust
+            port: 3001
+            setup: |
+              rustup toolchain install stable
+              cd rust && cargo build --example payment_link_server
+            start: cd rust && cargo run --example payment_link_server &
+          - server: go
+            port: 3002
+            setup: |
+              cd go && GOCACHE=/tmp/go-build-cache go build ./cmd/payment-link-server
+            start: cd go && GOCACHE=/tmp/go-build-cache go run ./cmd/payment-link-server &
+          - server: lua
+            port: 3003
+            setup: ""
+            start: node lua/tests/e2e-server.mjs &
+          - server: python
+            port: 3004
+            setup: cd python && pip install -e . -q
+            start: cd python && python examples/payment_link_server.py &
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.server == 'rust'
+      - uses: actions/setup-go@v5
+        if: matrix.server == 'go'
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
+      - name: Install interop test dependencies
+        working-directory: .
+        run: pip install -r tests/interop/requirements.txt -q
+      - name: Setup server
+        working-directory: .
+        run: ${{ matrix.setup }}
+      - name: Wait for Surfpool
+        working-directory: .
+        run: |
+          for i in $(seq 1 30); do
+            curl -s -X POST http://localhost:8899 \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}' \
+              && break
+            sleep 1
+          done
+      - name: Start ${{ matrix.server }} server
+        working-directory: .
+        run: ${{ matrix.start }}
+      - name: Wait for server
+        working-directory: .
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:${{ matrix.port }}/health && break
+            sleep 1
+          done
+      - name: Run interop tests
+        working-directory: .
+        run: |
+          SERVER_URL=http://localhost:${{ matrix.port }} \
+          RPC_URL=http://localhost:8899 \
+          python -m pytest tests/interop/ -v --rootdir=tests/interop

@@ -51,6 +51,67 @@ rs-fmt:
 rs-lint:
     cd rust && cargo clippy -- -D warnings
 
+# ── Go ──
+
+# Build Go SDK
+go-build:
+    mkdir -p /tmp/go-build-cache
+    cd go && GOCACHE=/tmp/go-build-cache go build ./...
+
+# Test Go SDK
+go-test:
+    mkdir -p /tmp/go-build-cache
+    cd go && GOCACHE=/tmp/go-build-cache go test ./...
+
+# Format Go SDK
+go-fmt:
+    cd go && gofmt -w $$(find . -name '*.go' -type f | sort)
+
+# Run Go coverage with a minimum threshold of 70%
+go-test-cover:
+    mkdir -p /tmp/go-build-cache
+    cd go && GOCACHE=/tmp/go-build-cache go test ./... -coverprofile=coverage.out -covermode=atomic
+    cd go && GOCACHE=/tmp/go-build-cache ./scripts/check_coverage.sh coverage.out 70
+
+# ── Lua ──
+
+# Run Lua SDK tests
+lua-test:
+    cd lua && lua tests/run.lua
+
+# Run Lua SDK coverage with a minimum threshold of 70%
+lua-test-cover:
+    cd lua && rm -f ../luacov.stats.out ../luacov.report.out
+    cd lua && eval "$(luarocks path)" && lua -lluacov tests/run.lua
+    cd lua && eval "$(luarocks path)" && luacov
+    cd lua && ./scripts/check_coverage.sh ../luacov.report.out 70
+
+# ── Python ──
+
+# Install Python SDK dependencies
+py-install:
+    cd python && pip install -e '.[dev]'
+
+# Run Python SDK tests
+py-test:
+    cd python && pytest
+
+# Run Python coverage with a minimum threshold of 85%
+py-test-cover:
+    cd python && pytest --cov --cov-report=term --cov-fail-under=85
+
+# Lint Python
+py-lint:
+    cd python && ruff check src/ tests/
+
+# Format Python
+py-fmt:
+    cd python && ruff format src/ tests/
+
+# Typecheck Python
+py-typecheck:
+    cd python && pyright
+
 # ── HTML Payment Links ──
 
 # Install HTML payment link dependencies
@@ -72,16 +133,16 @@ html-test-e2e:
 # ── Orchestration ──
 
 # Build compiled SDKs
-build: html-build ts-build rs-build
+build: html-build ts-build rs-build go-build
 
 # Run all unit tests
-test: ts-test rs-test go-test lua-test
+test: ts-test rs-test go-test lua-test py-test
 
 # Run all tests including integration + coverage gates
-test-all: ts-test ts-test-integration rs-test
+test-all: ts-test ts-test-integration rs-test go-test-cover lua-test-cover py-test-cover
 
 # Format everything
-fmt: ts-fmt rs-fmt
+fmt: ts-fmt rs-fmt go-fmt py-fmt
 
 # Pre-commit checks
-pre-commit: ts-audit ts-fmt ts-typecheck ts-test rs-fmt rs-lint rs-test
+pre-commit: ts-audit ts-fmt ts-typecheck ts-test rs-fmt rs-lint rs-test go-fmt go-test-cover lua-test-cover py-lint py-test-cover

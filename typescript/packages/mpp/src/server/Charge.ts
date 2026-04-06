@@ -102,7 +102,10 @@ export function charge(parameters: charge.Parameters) {
                   },
                   text: undefined,
                   theme: {
-                      logo: { dark: 'https://solana.com/favicon.ico', light: 'https://solana.com/favicon.ico' },
+                      logo: {
+                          dark: 'https://solana.com/src/img/branding/solanaLogoMark.svg',
+                          light: 'https://solana.com/src/img/branding/solanaLogoMark.svg',
+                      },
                   },
               }
             : undefined,

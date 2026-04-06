@@ -66,7 +66,7 @@ async function main() {
   const theme = Html.mergeDefined({
     favicon: undefined,
     fontUrl: undefined,
-    logo: { dark: 'https://solana.com/favicon.ico', light: 'https://solana.com/favicon.ico' },
+    logo: { dark: 'https://solana.com/src/img/branding/solanaLogoMark.svg', light: 'https://solana.com/src/img/branding/solanaLogoMark.svg' },
     ...Html.defaultTheme,
   }, {});
   const text = Html.sanitizeRecord(Html.mergeDefined(Html.defaultText, {}));
@@ -103,6 +103,10 @@ async function main() {
   // Also generate the service worker content from mppx
   const mppxServiceWorker = serviceWorkerContent;
 
+  // Write the shared template + service worker to html/dist/ (canonical location)
+  writeFileSync(resolve(outDir, 'template.html'), htmlTemplate);
+  writeFileSync(resolve(outDir, 'service-worker.js'), mppxServiceWorker);
+
   console.log(`  html-template.html (${(htmlTemplate.length / 1024).toFixed(1)} KB)`);
 
   // 4. Write generated embedding files for each language
@@ -131,6 +135,15 @@ async function main() {
     resolve(luaDir, 'gen.lua'),
     `-- AUTO-GENERATED — do not edit. Run \`npm run build\` in html/ to regenerate.\nlocal M = {}\nM.html_template = '${luaTemplate}'\nM.service_worker_js = '${luaSW}'\nreturn M\n`,
   );
+
+  // Python: write template + service worker as raw files for importlib.resources
+  const pyDir = resolve(import.meta.dirname, '..', 'python', 'src', 'solana_mpp', 'server', 'html');
+  mkdirSync(pyDir, { recursive: true });
+  writeFileSync(resolve(pyDir, 'template.gen.html'), htmlTemplate);
+  writeFileSync(resolve(pyDir, 'service_worker.gen.js'), mppxServiceWorker);
+  // Ensure __init__.py exists so importlib.resources can find the package
+  const pyInitPath = resolve(pyDir, '__init__.py');
+  try { writeFileSync(pyInitPath, '', { flag: 'wx' }); } catch { /* already exists */ }
 
   // TypeScript: write as .gen.ts export for @solana/mpp (with <script> wrapper for mppx)
   const tsDir = resolve(import.meta.dirname, '..', 'typescript', 'packages', 'mpp', 'src', 'server');

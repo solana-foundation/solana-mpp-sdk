@@ -1,0 +1,5 @@
+httpx>=0.27
+pytest>=8
+pytest-asyncio>=0.24
+solders>=0.22
+solana>=0.35

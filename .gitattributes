@@ -6,3 +6,5 @@ go/server/html/template.gen.html linguist-generated
 go/server/html/payment-ui.gen.js linguist-generated
 go/server/html/service-worker.gen.js linguist-generated
 lua/mpp/server/html_assets/gen.lua linguist-generated
+python/src/solana_mpp/server/html/template.gen.html linguist-generated
+python/src/solana_mpp/server/html/service_worker.gen.js linguist-generated

@@ -68,7 +68,15 @@ async fn fortune(
     }
 
     // Generate challenge.
-    let challenge = mpp.charge("0.01").expect("charge");
+    let challenge = mpp
+        .charge_with_options(
+            "0.01",
+            solana_mpp::server::ChargeOptions {
+                description: Some("Open a fortune cookie"),
+                ..Default::default()
+            },
+        )
+        .expect("charge");
     let www_auth = solana_mpp::format_www_authenticate(&challenge).unwrap_or_default();
 
     // Browser — HTML payment page.

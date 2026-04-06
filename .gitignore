@@ -6,6 +6,9 @@ dist/
 # Coverage
 coverage/
 *.lcov
+go/coverage.out
+luacov.stats.out
+luacov.report.out
 
 # Generated HTML payment link assets (built from html/)
 # Rust/Go/Lua gen files are committed (needed for cargo publish / go get).
@@ -21,3 +24,8 @@ Cargo.lock
 DUMP.md
 package/
 go/payment-link-server
+__pycache__/
+.coverage
+.venv/
+*.pyc
+tests/interop/go-client/go-client
