@@ -135,13 +135,14 @@ jobs:
       - name: Install and build
         working-directory: html
         run: |
-          npm ci
+          npm install
           npm run build
       - name: Upload HTML build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: html-assets
           path: |
+            html/dist/
             rust/src/server/html/
             go/server/html/
             lua/mpp/server/html_assets/
@@ -261,7 +262,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install HTML dependencies & Playwright
         working-directory: html
-        run: npm ci && npx playwright install chromium
+        run: npm install && npx playwright install chromium
       - name: Wait for Surfpool
         run: |
           for i in $(seq 1 30); do
@@ -316,7 +317,7 @@ jobs:
           name: html-assets
       - name: Install HTML dependencies & Playwright
         working-directory: html
-        run: npm ci && npx playwright install chromium
+        run: npm install && npx playwright install chromium
       - name: Build Rust test server
         working-directory: rust
         run: cargo build --example payment_link_server
@@ -367,7 +368,7 @@ jobs:
           name: html-assets
       - name: Install HTML dependencies & Playwright
         working-directory: html
-        run: npm ci && npx playwright install chromium
+        run: npm install && npx playwright install chromium
       - name: Wait for Surfpool
         run: |
           for i in $(seq 1 30); do
@@ -413,7 +414,7 @@ jobs:
           name: html-assets
       - name: Install HTML dependencies & Playwright
         working-directory: html
-        run: npm ci && npx playwright install chromium
+        run: npm install && npx playwright install chromium
       - name: Wait for Surfpool
         run: |
           for i in $(seq 1 30); do
