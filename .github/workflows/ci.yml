@@ -46,6 +46,7 @@ jobs:
 
   typecheck:
     name: Typecheck
+    needs: build-html
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +58,16 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
   test-ts:
     name: TypeScript tests
+    needs: build-html
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +79,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Download HTML assets
+        uses: actions/download-artifact@v4
+        with:
+          name: html-assets
 
       # TEMPORARY: Build surfpool-sdk-node native module for integration tests.
       # This will be replaced with a published npm package once surfpool-sdk is released.
@@ -146,6 +156,7 @@ jobs:
             rust/src/server/html/
             go/server/html/
             lua/mpp/server/html_assets/
+            typescript/packages/mpp/src/server/html-assets.gen.ts
 
   test-rust:
     name: Rust tests
