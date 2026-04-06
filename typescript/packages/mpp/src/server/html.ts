@@ -48,12 +48,12 @@ export function isServiceWorkerRequest(url: string): boolean {
 
 /** Returns the service worker JavaScript content. */
 export function serviceWorkerJs(): string {
-    return SERVICE_WORKER_JS;
+    return SERVICE_WORKER_JS as string;
 }
 
 /** Returns the payment UI JavaScript content (for advanced use). */
 export function paymentUiJs(): string {
-    return PAYMENT_UI_JS;
+    return PAYMENT_UI_JS as string;
 }
 
 /** HTML-escape a string to prevent XSS. */
