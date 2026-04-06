@@ -201,14 +201,14 @@ mod tests {
     #[test]
     fn test_challenge_to_html_structure() {
         let challenge = test_challenge(None);
-        let html = challenge_to_html(&challenge, "https://api.devnet.solana.com", "devnet");
+        let html = challenge_to_html(&challenge, "http://localhost:8899", "localnet");
 
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("id=\"root\""));
         assert!(html.contains("__MPP_DATA__"));
         assert!(html.contains("test-challenge-id"));
         assert!(html.len() > 1000);
-        assert!(html.contains("\"network\":\"devnet\""));
+        assert!(html.contains("\"network\":\"localnet\""));
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_challenge_to_html_basic_structure() {
         let challenge = test_challenge(None);
-        let html = challenge_to_html(&challenge, "http://localhost:8899", "devnet");
+        let html = challenge_to_html(&challenge, "http://localhost:8899", "localnet");
         // CSP is set as a response header by the server, not in the HTML meta tag.
         // Verify the HTML has the essential structural elements.
         assert!(html.contains("id=\"root\""));
@@ -249,14 +249,14 @@ mod tests {
             secret_key: Some(
                 "test-secret-key-long-enough-for-hmac-sha256-operations-1234567890".to_string(),
             ),
-            network: "devnet".to_string(),
+            network: "localnet".to_string(),
             html: true,
             ..Default::default()
         })
         .unwrap();
 
         assert!(mpp.html_enabled());
-        assert_eq!(mpp.network(), "devnet");
+        assert_eq!(mpp.network(), "localnet");
         assert!(!mpp.rpc_url().is_empty());
 
         // Generate a challenge and render as HTML
