@@ -18,6 +18,8 @@ use solana_mpp::solana_keychain::SolanaSigner;
 async fn main() {
     let server_url =
         std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let fortune_path =
+        std::env::var("FORTUNE_PATH").unwrap_or_else(|_| "/fortune".to_string());
     let rpc_url =
         std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8899".to_string());
 
@@ -40,7 +42,7 @@ async fn main() {
     // ── Test 2: Challenge ──
     print!("  challenge ... ");
     let resp = http
-        .get(format!("{server_url}/fortune"))
+        .get(format!("{server_url}{fortune_path}"))
         .send()
         .await
         .expect("fortune request failed");
@@ -134,7 +136,7 @@ async fn main() {
     // ── Test 5: Submit and get fortune ──
     print!("  payment ... ");
     let resp = http
-        .get(format!("{server_url}/fortune"))
+        .get(format!("{server_url}{fortune_path}"))
         .header("Authorization", &auth_header)
         .send()
         .await

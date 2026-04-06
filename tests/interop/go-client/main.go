@@ -31,6 +31,7 @@ import (
 
 func main() {
 	serverURL := envOrDefault("SERVER_URL", "http://localhost:3001")
+	fortunePath := envOrDefault("FORTUNE_PATH", "/fortune")
 	rpcURL := envOrDefault("RPC_URL", "http://localhost:8899")
 
 	fmt.Printf("Interop test: Go client → %s\n", serverURL)
@@ -49,7 +50,7 @@ func main() {
 
 	// ── Test 2: Challenge ──
 	fmt.Print("  challenge ... ")
-	resp = mustGet(httpClient, serverURL+"/fortune")
+	resp = mustGet(httpClient, serverURL+fortunePath)
 	mustClose(resp.Body)
 	assert(resp.StatusCode == 402, "fortune without auth should return 402, got %d", resp.StatusCode)
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
@@ -125,7 +126,7 @@ func main() {
 
 	// ── Test 5: Submit and get fortune ──
 	fmt.Print("  payment ... ")
-	req, err := http.NewRequest("GET", serverURL+"/fortune", nil)
+	req, err := http.NewRequest("GET", serverURL+fortunePath, nil)
 	mustOK(err, "create request")
 	req.Header.Set("Authorization", authHeader)
 	resp, err = httpClient.Do(req)

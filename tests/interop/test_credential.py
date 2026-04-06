@@ -85,10 +85,10 @@ def build_token_transfer_checked(
     )
 
 
-def test_full_payment_cycle_sol(client: httpx.Client, rpc_url: str, test_keypair: Keypair) -> None:
+def test_full_payment_cycle_sol(client: httpx.Client, fortune_path: str, rpc_url: str, test_keypair: Keypair) -> None:
     """Test full SOL payment: get challenge, build tx, submit credential, get fortune."""
     # 1. Get challenge
-    resp = client.get("/fortune")
+    resp = client.get(fortune_path)
     assert resp.status_code == 402
     challenge = parse_www_authenticate(resp.headers["www-authenticate"])
     request_data = json.loads(base64url_decode(challenge["request"]))
@@ -152,7 +152,7 @@ def test_full_payment_cycle_sol(client: httpx.Client, rpc_url: str, test_keypair
     auth_header = f"Payment {base64url_encode(json.dumps(credential).encode())}"
 
     # 5. Submit
-    resp = client.get("/fortune", headers={"Authorization": auth_header})
+    resp = client.get(fortune_path, headers={"Authorization": auth_header})
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
 
     # 6. Verify fortune response
@@ -160,10 +160,10 @@ def test_full_payment_cycle_sol(client: httpx.Client, rpc_url: str, test_keypair
     assert "fortune" in data
 
 
-def test_full_payment_cycle_token(client: httpx.Client, rpc_url: str, test_keypair: Keypair) -> None:
+def test_full_payment_cycle_token(client: httpx.Client, fortune_path: str, rpc_url: str, test_keypair: Keypair) -> None:
     """Test full USDC payment: get challenge, fund token account, build tx, submit, get fortune."""
     # 1. Get challenge
-    resp = client.get("/fortune")
+    resp = client.get(fortune_path)
     assert resp.status_code == 402
     challenge = parse_www_authenticate(resp.headers["www-authenticate"])
     request_data = json.loads(base64url_decode(challenge["request"]))
@@ -233,7 +233,7 @@ def test_full_payment_cycle_token(client: httpx.Client, rpc_url: str, test_keypa
     auth_header = f"Payment {base64url_encode(json.dumps(credential).encode())}"
 
     # 5. Submit
-    resp = client.get("/fortune", headers={"Authorization": auth_header})
+    resp = client.get(fortune_path, headers={"Authorization": auth_header})
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
 
     # 6. Verify fortune and receipt

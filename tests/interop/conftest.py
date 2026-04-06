@@ -23,6 +23,11 @@ def server_url() -> str:
 
 
 @pytest.fixture(scope="session")
+def fortune_path() -> str:
+    return os.environ.get("FORTUNE_PATH", "/fortune")
+
+
+@pytest.fixture(scope="session")
 def rpc_url() -> str:
     return os.environ.get("RPC_URL", "http://localhost:8899")
 

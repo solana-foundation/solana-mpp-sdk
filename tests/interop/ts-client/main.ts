@@ -36,6 +36,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const SERVER_URL = process.env.SERVER_URL ?? 'http://localhost:3001';
+const FORTUNE_PATH = process.env.FORTUNE_PATH ?? '/fortune';
 const RPC_URL = process.env.RPC_URL ?? 'http://localhost:8899';
 
 console.log(`Interop test: TypeScript client -> ${SERVER_URL}`);
@@ -165,7 +166,7 @@ async function main() {
   process.stdout.write('  challenge ... ');
   let challenge: Challenge;
   {
-    const resp = await fetch(`${SERVER_URL}/fortune`);
+    const resp = await fetch(`${SERVER_URL}${FORTUNE_PATH}`);
     assert(resp.status === 402, `fortune without auth should return 402, got ${resp.status}`);
     const wwwAuth = resp.headers.get('www-authenticate');
     assert(wwwAuth !== null, 'missing WWW-Authenticate header');
@@ -402,7 +403,7 @@ async function main() {
   // -- Test 5: Submit and get fortune --
   process.stdout.write('  payment ... ');
   {
-    const resp = await fetch(`${SERVER_URL}/fortune`, {
+    const resp = await fetch(`${SERVER_URL}${FORTUNE_PATH}`, {
       headers: { Authorization: authHeader },
     });
     const status = resp.status;
