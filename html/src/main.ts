@@ -380,7 +380,11 @@ async function rpcCall(url: string, method: string, params: unknown[]) {
   const j = await r.json(); if (j.error) throw new Error(`${method}: ${j.error.message}`); return j.result;
 }
 
-function getRpcUrl(n: string) { return n === 'devnet' ? 'https://api.devnet.solana.com' : n === 'localnet' ? 'http://localhost:8899' : 'https://api.mainnet-beta.solana.com'; }
+function getRpcUrl(n: string) {
+  // Prefer the RPC URL embedded in the challenge data (set by the server).
+  if (rawData.rpcUrl) return rawData.rpcUrl;
+  return n === 'devnet' ? 'https://api.devnet.solana.com' : n === 'localnet' ? 'http://localhost:8899' : 'https://api.mainnet-beta.solana.com';
+}
 
 function resolveMint(currency: string, network: string): string | null {
   if (currency.toLowerCase() === 'sol') return null;
