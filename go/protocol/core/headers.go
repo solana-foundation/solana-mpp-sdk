@@ -73,9 +73,9 @@ func FormatWWWAuthenticate(challenge PaymentChallenge) (string, error) {
 	if challenge.Expires != "" {
 		parts = append(parts, fmt.Sprintf(`expires="%s"`, escapeQuotedValue(challenge.Expires)))
 	}
-	if challenge.Description != "" {
-		parts = append(parts, fmt.Sprintf(`description="%s"`, escapeQuotedValue(challenge.Description)))
-	}
+	// description is already encoded inside the request payload —
+	// don't duplicate it as a top-level header param (non-ASCII descriptions
+	// would make the header value invalid).
 	if challenge.Digest != "" {
 		parts = append(parts, fmt.Sprintf(`digest="%s"`, escapeQuotedValue(challenge.Digest)))
 	}

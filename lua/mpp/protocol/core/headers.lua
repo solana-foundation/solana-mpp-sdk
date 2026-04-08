@@ -138,9 +138,9 @@ function M.format_www_authenticate(value)
   if plain.expires and plain.expires ~= '' then
     parts[#parts + 1] = 'expires="' .. escape_quoted(plain.expires) .. '"'
   end
-  if plain.description and plain.description ~= '' then
-    parts[#parts + 1] = 'description="' .. escape_quoted(plain.description) .. '"'
-  end
+  -- description is already encoded inside the request payload;
+  -- don't duplicate it as a top-level header param (non-ASCII descriptions
+  -- would make the header value invalid).
   if plain.digest and plain.digest ~= '' then
     parts[#parts + 1] = 'digest="' .. escape_quoted(plain.digest) .. '"'
   end

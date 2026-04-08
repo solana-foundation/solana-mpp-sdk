@@ -11,6 +11,7 @@ import (
 	"github.com/solana-foundation/mpp-sdk/go"
 	"github.com/solana-foundation/mpp-sdk/go/client"
 	"github.com/solana-foundation/mpp-sdk/go/internal/testutil"
+	"github.com/solana-foundation/mpp-sdk/go/protocol"
 )
 
 func newTestMpp(t *testing.T) (*Mpp, *testutil.FakeRPC, testutilConfig) {
@@ -332,6 +333,60 @@ func TestChargeWithOptionsDescriptionAndExternalID(t *testing.T) {
 	}
 	if req["externalId"] != "order-42" {
 		t.Fatalf("expected externalId in request, got %v", req["externalId"])
+	}
+}
+
+func TestChargeWithOptionsSplits(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, err := handler.ChargeWithOptions(context.Background(), "1.00", ChargeOptions{
+		Splits: []protocol.Split{
+			{Recipient: "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111", Amount: "500000", Memo: "Vendor payout"},
+			{Recipient: "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111", Amount: "29000"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	var req map[string]any
+	if err := challenge.Request.Decode(&req); err != nil {
+		t.Fatalf("decode request failed: %v", err)
+	}
+	md, ok := req["methodDetails"].(map[string]any)
+	if !ok {
+		t.Fatal("expected methodDetails")
+	}
+	splits, ok := md["splits"].([]any)
+	if !ok {
+		t.Fatal("expected splits in methodDetails")
+	}
+	if len(splits) != 2 {
+		t.Fatalf("expected 2 splits, got %d", len(splits))
+	}
+	first := splits[0].(map[string]any)
+	if first["amount"] != "500000" {
+		t.Fatalf("expected amount 500000, got %v", first["amount"])
+	}
+	if first["memo"] != "Vendor payout" {
+		t.Fatalf("expected memo, got %v", first["memo"])
+	}
+}
+
+func TestChargeWithOptionsNoSplitsOmitted(t *testing.T) {
+	handler, _, _ := newTestMpp(t)
+	challenge, err := handler.Charge(context.Background(), "1.00")
+	if err != nil {
+		t.Fatalf("charge failed: %v", err)
+	}
+	var req map[string]any
+	if err := challenge.Request.Decode(&req); err != nil {
+		t.Fatalf("decode request failed: %v", err)
+	}
+	md, ok := req["methodDetails"].(map[string]any)
+	if !ok {
+		t.Fatal("expected methodDetails")
+	}
+	if _, exists := md["splits"]; exists {
+		t.Fatal("splits should not be present when empty")
 	}
 }
 

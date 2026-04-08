@@ -104,10 +104,13 @@ class Split:
 
     recipient: str
     amount: str
+    label: str = ""
     memo: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {"recipient": self.recipient, "amount": self.amount}
+        if self.label:
+            d["label"] = self.label
         if self.memo:
             d["memo"] = self.memo
         return d
@@ -117,6 +120,7 @@ class Split:
         return cls(
             recipient=data["recipient"],
             amount=data["amount"],
+            label=data.get("label", ""),
             memo=data.get("memo", ""),
         )
 

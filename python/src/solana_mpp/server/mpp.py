@@ -33,6 +33,7 @@ class ChargeOptions:
     external_id: str = ""
     expires: str = ""
     fee_payer: bool = False
+    splits: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +108,8 @@ class Mpp:
             details["feePayer"] = True
             if self._fee_payer_signer is not None:
                 details["feePayerKey"] = str(self._fee_payer_signer.pubkey())
+        if options.splits:
+            details["splits"] = options.splits
 
         request_obj: dict[str, Any] = {
             "amount": base_units,

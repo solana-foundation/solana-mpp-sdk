@@ -57,6 +57,7 @@ type MethodDetails struct {
 type Split struct {
 	Recipient string `json:"recipient"`
 	Amount    string `json:"amount"`
+	Label     string `json:"label,omitempty"`
 	Memo      string `json:"memo,omitempty"`
 }
 

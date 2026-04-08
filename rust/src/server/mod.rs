@@ -112,6 +112,8 @@ pub struct ChargeOptions<'a> {
     pub external_id: Option<&'a str>,
     pub expires: Option<&'a str>,
     pub fee_payer: bool,
+    /// Resolved payment splits to embed in `methodDetails.splits`.
+    pub splits: Vec<crate::protocol::solana::Split>,
 }
 
 // ── Mpp handler ──
@@ -247,6 +249,11 @@ impl Mpp {
                 "tokenProgram".into(),
                 serde_json::json!(programs::TOKEN_PROGRAM),
             );
+        }
+
+        // Embed payment splits so the client can build multi-transfer transactions.
+        if !options.splits.is_empty() {
+            details.insert("splits".into(), serde_json::to_value(&options.splits).unwrap());
         }
 
         // Pre-fetch blockhash so the client doesn't need an extra RPC call.
@@ -1739,6 +1746,56 @@ mod tests {
 
         let request: ChargeRequest = challenge.request.decode().unwrap();
         assert_eq!(request.external_id.as_deref(), Some("order-123"));
+    }
+
+    #[test]
+    fn charge_with_options_splits() {
+        let mpp = test_mpp();
+        let splits = vec![
+            crate::protocol::solana::Split {
+                recipient: "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
+                amount: "500000".to_string(),
+                memo: Some("Vendor payout".to_string()),
+            },
+            crate::protocol::solana::Split {
+                recipient: "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
+                amount: "29000".to_string(),
+                memo: Some("Processing fee".to_string()),
+            },
+        ];
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    splits,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details = request.method_details.unwrap();
+        let splits_val = details.get("splits").expect("splits should be in methodDetails");
+        let splits_arr = splits_val.as_array().unwrap();
+        assert_eq!(splits_arr.len(), 2);
+        assert_eq!(splits_arr[0]["amount"], "500000");
+        assert_eq!(splits_arr[0]["memo"], "Vendor payout");
+        assert_eq!(splits_arr[1]["amount"], "29000");
+    }
+
+    #[test]
+    fn charge_with_options_no_splits_omitted() {
+        let mpp = test_mpp();
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions::default(),
+            )
+            .unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details = request.method_details.unwrap();
+        assert!(details.get("splits").is_none(), "splits should not be present when empty");
     }
 
     #[test]

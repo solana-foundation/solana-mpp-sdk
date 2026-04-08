@@ -68,6 +68,27 @@ class TestCharge:
         assert request["recipient"] == TEST_RECIPIENT
         assert request["currency"] == "USDC"
 
+    def test_charge_with_splits(self, mpp: Mpp):
+        options = ChargeOptions(
+            splits=[
+                {"recipient": "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111", "amount": "500000", "memo": "Vendor payout"},
+                {"recipient": "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111", "amount": "29000"},
+            ],
+        )
+        challenge = mpp.charge_with_options("1.00", options)
+        request = challenge.decode_request()
+        md = request["methodDetails"]
+        assert "splits" in md
+        assert len(md["splits"]) == 2
+        assert md["splits"][0]["amount"] == "500000"
+        assert md["splits"][0]["memo"] == "Vendor payout"
+
+    def test_charge_without_splits_omitted(self, mpp: Mpp):
+        challenge = mpp.charge("1.00")
+        request = challenge.decode_request()
+        md = request["methodDetails"]
+        assert "splits" not in md
+
 
 class TestVerifyCredential:
     async def test_challenge_mismatch(self, mpp: Mpp):

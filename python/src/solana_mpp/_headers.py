@@ -84,8 +84,9 @@ def format_www_authenticate(challenge: PaymentChallenge) -> str:
     ]
     if challenge.expires:
         parts.append(f'expires="{_escape_quoted_value(challenge.expires)}"')
-    if challenge.description:
-        parts.append(f'description="{_escape_quoted_value(challenge.description)}"')
+    # description is already encoded inside the `request` payload —
+    # don't duplicate it as a top-level header param (non-ASCII descriptions
+    # would make the header value invalid).
     if challenge.digest:
         parts.append(f'digest="{_escape_quoted_value(challenge.digest)}"')
     if challenge.opaque is not None:

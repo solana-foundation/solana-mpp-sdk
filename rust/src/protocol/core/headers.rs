@@ -103,12 +103,9 @@ pub fn format_www_authenticate(challenge: &PaymentChallenge) -> Result<String, E
     if let Some(ref expires) = challenge.expires {
         parts.push(format!("expires=\"{}\"", escape_quoted_value(expires)?));
     }
-    if let Some(ref description) = challenge.description {
-        parts.push(format!(
-            "description=\"{}\"",
-            escape_quoted_value(description)?
-        ));
-    }
+    // description is already encoded inside the `request` payload —
+    // don't duplicate it as a top-level header param (non-ASCII descriptions
+    // like em-dashes would make the header value invalid).
     if let Some(ref digest) = challenge.digest {
         parts.push(format!("digest=\"{}\"", escape_quoted_value(digest)?));
     }
@@ -496,7 +493,8 @@ mod tests {
         };
         let header = format_www_authenticate(&challenge).unwrap();
         assert!(header.contains("expires="));
-        assert!(header.contains("description="));
+        // description is no longer emitted (it's inside the request payload)
+        assert!(!header.contains("description="));
         assert!(header.contains("digest="));
         assert!(header.contains("opaque="));
     }
