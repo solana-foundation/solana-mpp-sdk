@@ -1755,11 +1755,13 @@ mod tests {
             crate::protocol::solana::Split {
                 recipient: "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
                 amount: "500000".to_string(),
+                label: None,
                 memo: Some("Vendor payout".to_string()),
             },
             crate::protocol::solana::Split {
                 recipient: "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
                 amount: "29000".to_string(),
+                label: None,
                 memo: Some("Processing fee".to_string()),
             },
         ];
@@ -2369,6 +2371,7 @@ mod tests {
         let splits = vec![Split {
             recipient: split_recipient.to_string(),
             amount: "200000".to_string(),
+            label: None,
             memo: None,
         }];
 
@@ -2390,6 +2393,7 @@ mod tests {
         let splits = vec![Split {
             recipient: "SplitRecipient".to_string(),
             amount: "200000".to_string(),
+            label: None,
             memo: None,
         }];
 
@@ -2524,6 +2528,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: split_amount.to_string(),
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2544,6 +2549,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: "200".to_string(), // exceeds total of 100
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2565,6 +2571,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: "1000".to_string(), // exactly equals total => primary = 0
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2647,6 +2654,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: split_amount.to_string(),
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
