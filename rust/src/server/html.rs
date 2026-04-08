@@ -34,7 +34,9 @@ const SERVICE_WORKER_JS: &str = include_str!("html/service_worker.gen.js");
 /// Query parameter that triggers serving the service worker JS file.
 pub const SERVICE_WORKER_PARAM: &str = "__mpp_worker";
 
-/// ID of the embedded data `<script>` element.
+/// ID of the embedded data `<script>` element in the generated template.
+/// Kept in sync with `html/src/main.ts` which reads `__MPP_DATA__`.
+#[allow(dead_code)]
 const DATA_ELEMENT_ID: &str = "__MPP_DATA__";
 
 /// Check if an HTTP `Accept` header value includes `text/html`.

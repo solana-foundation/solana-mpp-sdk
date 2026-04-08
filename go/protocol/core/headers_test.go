@@ -105,8 +105,9 @@ func TestParseWWWAuthenticateWithOpaqueAndDigest(t *testing.T) {
 	if parsed.Opaque.Raw() != opaque.Raw() {
 		t.Fatalf("opaque mismatch: got %q, want %q", parsed.Opaque.Raw(), opaque.Raw())
 	}
-	if parsed.Description != "description" {
-		t.Fatalf("expected description, got %q", parsed.Description)
+	// description is no longer emitted in the header (it's inside the request payload)
+	if parsed.Description != "" {
+		t.Fatalf("expected empty description, got %q", parsed.Description)
 	}
 }
 
@@ -128,7 +129,7 @@ func TestFormatWWWAuthenticateAllOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("format failed: %v", err)
 	}
-	for _, needle := range []string{`expires="`, `description="`, `digest="`, `opaque="`} {
+	for _, needle := range []string{`expires="`, `digest="`, `opaque="`} {
 		if !contains(header, needle) {
 			t.Fatalf("header missing %q: %s", needle, header)
 		}

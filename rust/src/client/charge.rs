@@ -561,6 +561,7 @@ mod tests {
         let splits = vec![Split {
             recipient: split_recipient.to_string(),
             amount: "500".to_string(),
+            label: None,
             memo: None,
         }];
         let mut instructions = Vec::new();
@@ -576,6 +577,7 @@ mod tests {
         let splits = vec![Split {
             recipient: "not-a-pubkey!!!".to_string(),
             amount: "500".to_string(),
+            label: None,
             memo: None,
         }];
         let mut instructions = Vec::new();
@@ -593,6 +595,7 @@ mod tests {
         let splits = vec![Split {
             recipient: split_recipient.to_string(),
             amount: "not_a_number".to_string(),
+            label: None,
             memo: None,
         }];
         let mut instructions = Vec::new();

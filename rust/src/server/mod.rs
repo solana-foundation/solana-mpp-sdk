@@ -112,6 +112,8 @@ pub struct ChargeOptions<'a> {
     pub external_id: Option<&'a str>,
     pub expires: Option<&'a str>,
     pub fee_payer: bool,
+    /// Resolved payment splits to embed in `methodDetails.splits`.
+    pub splits: Vec<crate::protocol::solana::Split>,
 }
 
 // ── Mpp handler ──
@@ -246,6 +248,14 @@ impl Mpp {
             details.insert(
                 "tokenProgram".into(),
                 serde_json::json!(programs::TOKEN_PROGRAM),
+            );
+        }
+
+        // Embed payment splits so the client can build multi-transfer transactions.
+        if !options.splits.is_empty() {
+            details.insert(
+                "splits".into(),
+                serde_json::to_value(&options.splits).unwrap(),
             );
         }
 
@@ -1742,6 +1752,60 @@ mod tests {
     }
 
     #[test]
+    fn charge_with_options_splits() {
+        let mpp = test_mpp();
+        let splits = vec![
+            crate::protocol::solana::Split {
+                recipient: "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
+                amount: "500000".to_string(),
+                label: None,
+                memo: Some("Vendor payout".to_string()),
+            },
+            crate::protocol::solana::Split {
+                recipient: "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111".to_string(),
+                amount: "29000".to_string(),
+                label: None,
+                memo: Some("Processing fee".to_string()),
+            },
+        ];
+        let challenge = mpp
+            .charge_with_options(
+                "1.00",
+                ChargeOptions {
+                    splits,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details = request.method_details.unwrap();
+        let splits_val = details
+            .get("splits")
+            .expect("splits should be in methodDetails");
+        let splits_arr = splits_val.as_array().unwrap();
+        assert_eq!(splits_arr.len(), 2);
+        assert_eq!(splits_arr[0]["amount"], "500000");
+        assert_eq!(splits_arr[0]["memo"], "Vendor payout");
+        assert_eq!(splits_arr[1]["amount"], "29000");
+    }
+
+    #[test]
+    fn charge_with_options_no_splits_omitted() {
+        let mpp = test_mpp();
+        let challenge = mpp
+            .charge_with_options("1.00", ChargeOptions::default())
+            .unwrap();
+
+        let request: ChargeRequest = challenge.request.decode().unwrap();
+        let details = request.method_details.unwrap();
+        assert!(
+            details.get("splits").is_none(),
+            "splits should not be present when empty"
+        );
+    }
+
+    #[test]
     fn charge_with_options_custom_expiry() {
         let mpp = test_mpp();
         let custom_expires = crate::expires::minutes(30);
@@ -2312,6 +2376,7 @@ mod tests {
         let splits = vec![Split {
             recipient: split_recipient.to_string(),
             amount: "200000".to_string(),
+            label: None,
             memo: None,
         }];
 
@@ -2333,6 +2398,7 @@ mod tests {
         let splits = vec![Split {
             recipient: "SplitRecipient".to_string(),
             amount: "200000".to_string(),
+            label: None,
             memo: None,
         }];
 
@@ -2467,6 +2533,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: split_amount.to_string(),
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2487,6 +2554,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: "200".to_string(), // exceeds total of 100
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2508,6 +2576,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: "1000".to_string(), // exactly equals total => primary = 0
+                label: None,
                 memo: None,
             }]),
             ..Default::default()
@@ -2590,6 +2659,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: split_recipient.to_string(),
                 amount: split_amount.to_string(),
+                label: None,
                 memo: None,
             }]),
             ..Default::default()

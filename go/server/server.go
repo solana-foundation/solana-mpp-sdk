@@ -47,6 +47,8 @@ type ChargeOptions struct {
 	ExternalID  string
 	Expires     string
 	FeePayer    bool
+	// Splits are additional payment transfers embedded in methodDetails.
+	Splits []protocol.Split
 }
 
 // Mpp is the server-side Solana charge handler.
@@ -139,6 +141,9 @@ func (m *Mpp) ChargeWithOptions(ctx context.Context, amount string, options Char
 		if m.feePayerSigner != nil {
 			details.FeePayerKey = m.feePayerSigner.PublicKey().String()
 		}
+	}
+	if len(options.Splits) > 0 {
+		details.Splits = options.Splits
 	}
 	if out, err := m.rpc.GetLatestBlockhash(ctx, rpc.CommitmentConfirmed); err == nil && out != nil && out.Value != nil {
 		details.RecentBlockhash = out.Value.Blockhash.String()

@@ -109,6 +109,7 @@ mod tests {
             splits: Some(vec![Split {
                 recipient: "Recipient1".to_string(),
                 amount: "100".to_string(),
+                label: None,
                 memo: Some("test memo".to_string()),
             }]),
             recent_blockhash: Some("BlockhashXyz".to_string()),
@@ -175,6 +176,7 @@ mod tests {
         let split = Split {
             recipient: "R1".to_string(),
             amount: "500".to_string(),
+            label: None,
             memo: Some("tip".to_string()),
         };
         let json = serde_json::to_string(&split).unwrap();
@@ -188,6 +190,7 @@ mod tests {
         let split = Split {
             recipient: "R1".to_string(),
             amount: "500".to_string(),
+            label: None,
             memo: None,
         };
         let json = serde_json::to_string(&split).unwrap();
@@ -232,6 +235,9 @@ pub struct Split {
     pub recipient: String,
     /// Amount in base units.
     pub amount: String,
+    /// Human-readable label for the recipient (e.g. "Vendor", "Tax Authority").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Optional memo (max 566 bytes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memo: Option<String>,

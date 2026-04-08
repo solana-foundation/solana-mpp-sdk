@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 solana-mpp = { path = "../../../rust" }
-solana-keychain = { git = "https://github.com/solana-foundation/solana-keychain", rev = "658bdefa", default-features = false, features = ["memory"] }
+solana-keychain = { git = "https://github.com/solana-foundation/solana-keychain", rev = "abf75944", default-features = false, features = ["memory"] }
 solana-rpc-client = "3.1"
 solana-signature = "3.1"
 reqwest = { version = "0.12", features = ["json"] }

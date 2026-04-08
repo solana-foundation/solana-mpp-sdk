@@ -79,6 +79,7 @@ btn.onclick = async () => {
       await payWithWallet();
     }
   } catch (err: any) {
+    console.error('[pay.sh] Payment error:', err);
     statusEl.textContent = err.message ?? 'Payment failed';
     statusEl.style.color = 'var(--mppx-negative, #e53e3e)';
     btn.disabled = false;
@@ -371,7 +372,7 @@ function bs58Encode(bytes: Uint8Array): string {
   return r;
 }
 
-function base64UrlEncode(data: string): string { return btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function base64UrlEncode(data: string): string { return btoa(String.fromCharCode(...new TextEncoder().encode(data))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 
 // ── RPC ──
 
