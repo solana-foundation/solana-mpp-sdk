@@ -253,7 +253,10 @@ impl Mpp {
 
         // Embed payment splits so the client can build multi-transfer transactions.
         if !options.splits.is_empty() {
-            details.insert("splits".into(), serde_json::to_value(&options.splits).unwrap());
+            details.insert(
+                "splits".into(),
+                serde_json::to_value(&options.splits).unwrap(),
+            );
         }
 
         // Pre-fetch blockhash so the client doesn't need an extra RPC call.
@@ -1777,7 +1780,9 @@ mod tests {
 
         let request: ChargeRequest = challenge.request.decode().unwrap();
         let details = request.method_details.unwrap();
-        let splits_val = details.get("splits").expect("splits should be in methodDetails");
+        let splits_val = details
+            .get("splits")
+            .expect("splits should be in methodDetails");
         let splits_arr = splits_val.as_array().unwrap();
         assert_eq!(splits_arr.len(), 2);
         assert_eq!(splits_arr[0]["amount"], "500000");
@@ -1789,15 +1794,15 @@ mod tests {
     fn charge_with_options_no_splits_omitted() {
         let mpp = test_mpp();
         let challenge = mpp
-            .charge_with_options(
-                "1.00",
-                ChargeOptions::default(),
-            )
+            .charge_with_options("1.00", ChargeOptions::default())
             .unwrap();
 
         let request: ChargeRequest = challenge.request.decode().unwrap();
         let details = request.method_details.unwrap();
-        assert!(details.get("splits").is_none(), "splits should not be present when empty");
+        assert!(
+            details.get("splits").is_none(),
+            "splits should not be present when empty"
+        );
     }
 
     #[test]
