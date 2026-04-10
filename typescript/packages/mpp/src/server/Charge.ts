@@ -1,4 +1,11 @@
-import { address, isTransactionPartialSigner, type TransactionPartialSigner } from '@solana/kit';
+import {
+    address,
+    getBase64Codec,
+    getCompiledTransactionMessageDecoder,
+    getTransactionDecoder,
+    isTransactionPartialSigner,
+    type TransactionPartialSigner,
+} from '@solana/kit';
 import { findAssociatedTokenPda } from '@solana-program/token';
 import { Method, Receipt, Store } from 'mppx';
 
@@ -6,6 +13,7 @@ import { DEFAULT_RPC_URLS, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from '../constant
 import * as Methods from '../Methods.js';
 import { coSignBase64Transaction } from '../utils/transactions.js';
 import { PAYMENT_UI_JS } from './html-assets.gen.js';
+import { checkNetworkBlockhash } from './network-check.js';
 
 /**
  * Creates a Solana `charge` method for usage on the server.
@@ -158,7 +166,7 @@ export function charge(parameters: charge.Parameters) {
             }
 
             if (payloadType === 'transaction') {
-                return await verifyTransaction(cred, challenge, rpcUrl, recipient, store, signer);
+                return await verifyTransaction(cred, challenge, rpcUrl, recipient, store, signer, network);
             }
 
             return await verifySignature(cred, challenge, rpcUrl, recipient, store);
@@ -180,6 +188,20 @@ function resolvePayloadType(payload: {
     throw new Error('Missing or invalid payload type: must be "transaction" or "signature"');
 }
 
+// ── Blockhash extraction ──
+//
+// Used by the network/blockhash sanity check below to read the lifetime
+// blockhash out of a base64-encoded wire transaction without doing a full
+// instruction decode. The compiled message decoder gives us a
+// `lifetimeToken` (== recent blockhash, base58 string) for non-durable-nonce
+// transactions, which is exactly what we need.
+function extractRecentBlockhash(clientTxBase64: string): string {
+    const txBytes = getBase64Codec().encode(clientTxBase64);
+    const decoded = getTransactionDecoder().decode(txBytes);
+    const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
+    return message.lifetimeToken as string;
+}
+
 // ── Pull mode (type="transaction") ──
 
 async function verifyTransaction(
@@ -188,12 +210,19 @@ async function verifyTransaction(
     rpcUrl: string,
     recipient: string,
     store: Store.Store,
-    signer?: TransactionPartialSigner,
+    signer: TransactionPartialSigner | undefined,
+    network: string,
 ) {
     const { transaction: clientTxBase64 } = credential.payload;
     if (!clientTxBase64) {
         throw new Error('Missing transaction data in credential payload');
     }
+
+    // Reject up-front if the client signed against the wrong network
+    // (e.g. mainnet keypair pointed at a sandbox-configured server, or
+    // vice versa). Cheaper and clearer than letting the broadcast fail
+    // with a confusing "transaction not found" error.
+    checkNetworkBlockhash(network, extractRecentBlockhash(clientTxBase64));
 
     let txToSend = clientTxBase64;
 

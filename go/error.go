@@ -24,6 +24,7 @@ const (
 	ErrCodeChallengeExpired    ErrorCode = "challenge-expired"
 	ErrCodeChallengeMismatch   ErrorCode = "challenge-mismatch"
 	ErrCodeInvalidMethod       ErrorCode = "invalid-method"
+	ErrCodeWrongNetwork        ErrorCode = "wrong-network"
 	ErrCodeOther               ErrorCode = "other"
 )
 

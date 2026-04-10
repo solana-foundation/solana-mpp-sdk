@@ -16,6 +16,7 @@ from solana_mpp._errors import (
 from solana_mpp._types import PaymentChallenge, PaymentCredential, Receipt
 from solana_mpp.protocol.intents import ChargeRequest, parse_units
 from solana_mpp.protocol.solana import CredentialPayload, MethodDetails, default_rpc_url, is_native_sol
+from solana_mpp.server.network_check import check_network_blockhash
 from solana_mpp.store import MemoryStore, Store
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,27 @@ logger = logging.getLogger(__name__)
 _DEFAULT_REALM = "MPP Payment"
 _SECRET_KEY_ENV_VAR = "MPP_SECRET_KEY"
 _CONSUMED_PREFIX = "solana-charge:consumed:"
+
+
+def _extract_recent_blockhash(transaction_b64: str) -> str:
+    """Decode a base64 transaction and return its recent blockhash (base58).
+
+    Tries the legacy ``Transaction`` first (the most common shape from our
+    SDK clients) and falls back to ``VersionedTransaction``. Kept thin so
+    the surrounding network check can be exercised by tests without a full
+    verification pipeline in place.
+    """
+    import base64
+
+    from solders.transaction import Transaction, VersionedTransaction
+
+    raw = base64.b64decode(transaction_b64)
+    try:
+        tx = Transaction.from_bytes(raw)
+        return str(tx.message.recent_blockhash)
+    except Exception:
+        vtx = VersionedTransaction.from_bytes(raw)
+        return str(vtx.message.recent_blockhash)
 
 
 @dataclass
@@ -191,6 +213,20 @@ class Mpp:
         """Verify a pull-mode transaction credential."""
         if not payload.transaction:
             raise PaymentError("missing transaction data in credential payload", code="missing-transaction")
+
+        # Reject up-front if the client signed against the wrong network
+        # (e.g. mainnet keypair pointed at a sandbox-configured server, or
+        # vice versa). Cheaper and clearer than letting the broadcast fail.
+        # Done here in the entry path so it runs even while the rest of the
+        # pipeline below is still a stub.
+        try:
+            blockhash_b58 = _extract_recent_blockhash(payload.transaction)
+        except Exception as exc:  # noqa: BLE001 — propagate decode failures as invalid payload
+            raise PaymentError(
+                f"could not decode transaction to read blockhash: {exc}",
+                code="invalid-payload-type",
+            ) from exc
+        check_network_blockhash(self._network, blockhash_b58)
 
         # Decode and process the transaction
         # In a real implementation, this would use solders to deserialize,

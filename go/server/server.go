@@ -239,6 +239,13 @@ func (m *Mpp) verifyTransaction(
 	if err != nil {
 		return mpp.Receipt{}, err
 	}
+	// Reject up-front if the client signed against the wrong network
+	// (e.g. mainnet keypair pointed at a sandbox-configured server, or
+	// vice versa). Cheaper and clearer than letting the broadcast fail
+	// with a confusing "transaction not found" error from the verifier.
+	if err := CheckNetworkBlockhash(m.network, tx.Message.RecentBlockhash.String()); err != nil {
+		return mpp.Receipt{}, err
+	}
 	if m.feePayerSigner != nil {
 		if err := solanautil.SignTransaction(tx, m.feePayerSigner); err != nil {
 			return mpp.Receipt{}, err

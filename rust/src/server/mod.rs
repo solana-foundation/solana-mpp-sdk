@@ -485,6 +485,11 @@ impl Mpp {
 
         let t0 = std::time::Instant::now();
 
+        // Reject up-front if the client signed against the wrong network
+        // (e.g. mainnet keypair pointed at a sandbox-configured server, or
+        // vice versa). Cheaper and clearer than letting the broadcast fail.
+        check_network_blockhash(&self.network, &tx.message.recent_blockhash.to_string())?;
+
         // Verify the transaction instructions BEFORE co-signing or broadcasting.
         verify_transaction_pre_broadcast(&tx, request, method_details)?;
         tracing::info!(elapsed_ms = %t0.elapsed().as_millis(), step = "pre_broadcast_check", "verify_pull");
@@ -631,6 +636,59 @@ impl Mpp {
 
         Ok(())
     }
+}
+
+// ── Network / blockhash sanity check ──
+//
+// The Surfpool localnet implementation embeds a recognizable prefix into
+// every blockhash it returns. We use this to catch the common footgun
+// where a client signs a transaction against a Surfpool RPC and submits
+// it to a server configured for a real cluster (mainnet/devnet).
+//
+// The check is asymmetric:
+//
+// - If the blockhash starts with the Surfpool prefix, the transaction
+//   was DEFINITELY signed against a Surfpool localnet. The only network
+//   slug for which that's valid is `localnet` — any other slug must
+//   reject the credential up-front, before wasting an RPC round trip
+//   on a doomed broadcast that will surface as a confusing "transaction
+//   not found" error.
+//
+// - If the blockhash does NOT start with the Surfpool prefix, we can't
+//   tell what cluster it came from (real localnet doesn't add a prefix
+//   either), so we accept it and let the broadcast/simulate path
+//   surface any genuine mismatch.
+
+/// Base58 prefix embedded in every blockhash returned by the Surfpool
+/// localnet implementation. Servers configured for any network OTHER than
+/// `localnet` use this prefix to detect wrong-RPC client mistakes.
+pub const SURFPOOL_BLOCKHASH_PREFIX: &str = "SURFNETxSAFEHASH";
+
+/// Network slug for Solana's local validator. The only network for which
+/// a Surfpool-prefixed blockhash is valid.
+pub const LOCALNET_NETWORK: &str = "localnet";
+
+/// Pure check: rejects a credential if the signed blockhash carries the
+/// Surfpool prefix and the server is configured for any network other
+/// than `localnet`.
+///
+/// Returns `Ok(())` in every other case — a non-Surfpool blockhash is
+/// undetectable as wrong-cluster from the slug alone, so we let the
+/// downstream broadcast handle it.
+pub fn check_network_blockhash(
+    network: &str,
+    blockhash_b58: &str,
+) -> Result<(), VerificationError> {
+    if !blockhash_b58.starts_with(SURFPOOL_BLOCKHASH_PREFIX) {
+        return Ok(());
+    }
+    if network == LOCALNET_NETWORK {
+        return Ok(());
+    }
+    Err(VerificationError::wrong_network(format!(
+        "Signed against localnet but the server expects {network}. \
+         Switch your client RPC to {network} and re-sign."
+    )))
 }
 
 // ── Pre-broadcast verification ──
@@ -1102,6 +1160,15 @@ impl VerificationError {
         )
     }
 
+    pub fn wrong_network(msg: impl Into<String>) -> Self {
+        Self::with_code(
+            msg,
+            "wrong-network",
+            "Wrong Network",
+            "tag:paymentauth.org,2024:wrong-network",
+        )
+    }
+
     pub fn signature_consumed(msg: impl Into<String>) -> Self {
         Self::with_code(
             msg,
@@ -1136,12 +1203,12 @@ impl VerificationError {
 }
 
 impl std::fmt::Display for VerificationError {
+    /// Render just the human-readable message. Callers that need the
+    /// stable error code branch on `self.code` directly — including a
+    /// `[code]` prefix in Display would make UI surfaces look like log
+    /// lines.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(code) = self.code {
-            write!(f, "[{code}] {}", self.message)
-        } else {
-            write!(f, "{}", self.message)
-        }
+        write!(f, "{}", self.message)
     }
 }
 
@@ -1150,6 +1217,135 @@ impl std::error::Error for VerificationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── check_network_blockhash ────────────────────────────────────────────
+    //
+    // Pure function — no I/O, no async, no fixtures. The check is asymmetric:
+    // a Surfpool-prefixed blockhash is only valid on `localnet`, but a
+    // non-prefixed blockhash is accepted on any network (we can't tell
+    // from a non-prefixed hash what real cluster it came from).
+
+    // Happy paths.
+
+    #[test]
+    fn verification_error_display_omits_code_prefix() {
+        // The Display impl is the user-facing error string. It must not
+        // prepend `[<code>]` — that's debug noise that leaks log-line
+        // formatting into UI surfaces (the "Payment rejected by verifier"
+        // notice in the pay CLI being the original report).
+        let err = VerificationError::wrong_network("Signed against localnet but the server expects mainnet.");
+        let displayed = err.to_string();
+        assert!(!displayed.starts_with("["), "leading bracket: {displayed}");
+        assert!(!displayed.contains("[wrong-network]"), "code in display: {displayed}");
+        assert_eq!(
+            displayed,
+            "Signed against localnet but the server expects mainnet."
+        );
+        // The structured code is still available on the field for
+        // callers that need to branch on it programmatically.
+        assert_eq!(err.code, Some("wrong-network"));
+    }
+
+    #[test]
+    fn network_check_localnet_with_surfpool_hash_ok() {
+        assert!(check_network_blockhash(
+            "localnet",
+            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn network_check_localnet_with_real_hash_ok() {
+        // Real localnet validator (not Surfpool) — also valid.
+        assert!(check_network_blockhash("localnet", "11111111111111111111111111111111").is_ok());
+    }
+
+    #[test]
+    fn network_check_mainnet_with_real_hash_ok() {
+        assert!(check_network_blockhash(
+            "mainnet",
+            "9zrUHnA1nCByPksy3aL8tQ47vqdaG2vnFs4HrxgcZj4F"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn network_check_devnet_with_real_hash_ok() {
+        assert!(check_network_blockhash(
+            "devnet",
+            "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N"
+        )
+        .is_ok());
+    }
+
+    // The actual bug surface: Surfpool-signed hash on a non-localnet server.
+
+    #[test]
+    fn network_check_mainnet_rejects_surfpool_hash() {
+        let err = check_network_blockhash(
+            "mainnet",
+            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, Some("wrong-network"));
+        assert!(!err.retryable);
+        // Message should name both sides of the mismatch + give an
+        // actionable next step.
+        assert!(
+            err.message.contains("Signed against localnet"),
+            "missing received-side: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("server expects mainnet"),
+            "missing expected-side: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("re-sign"),
+            "missing actionable hint: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn network_check_devnet_rejects_surfpool_hash() {
+        let err = check_network_blockhash(
+            "devnet",
+            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, Some("wrong-network"));
+        assert!(err.message.contains("server expects devnet"));
+    }
+
+    // Edge cases.
+
+    #[test]
+    fn network_check_partial_prefix_does_not_match() {
+        // "SURFNETx" alone (8 chars) is NOT the full prefix and must not
+        // be misclassified as a Surfpool blockhash.
+        assert!(check_network_blockhash("mainnet", "SURFNETx9zrUHnA1nCByPksy").is_ok());
+    }
+
+    #[test]
+    fn network_check_exact_prefix_only_is_treated_as_surfpool() {
+        // A blockhash equal to (or starting with) exactly the prefix counts.
+        assert!(check_network_blockhash("localnet", SURFPOOL_BLOCKHASH_PREFIX).is_ok());
+        assert!(check_network_blockhash("mainnet", SURFPOOL_BLOCKHASH_PREFIX).is_err());
+    }
+
+    #[test]
+    fn network_check_non_surfpool_hash_passes_anywhere() {
+        // The check is asymmetric: a real-cluster-looking blockhash is
+        // accepted on every network because we can't tell from a
+        // non-prefixed hash which real cluster it came from. This test
+        // pins the design intent.
+        assert!(check_network_blockhash("mainnet", "11111111111111111111111111111111").is_ok());
+        assert!(check_network_blockhash("devnet", "11111111111111111111111111111111").is_ok());
+        assert!(check_network_blockhash("localnet", "11111111111111111111111111111111").is_ok());
+    }
 
     #[test]
     fn ata_derivation_verification() {
@@ -2273,9 +2469,12 @@ mod tests {
     }
 
     #[test]
-    fn verification_error_display_with_code() {
+    fn verification_error_display_omits_code_even_when_present() {
+        // Display is the user-facing message — the structured `code`
+        // field stays accessible for callers that need to branch on it.
         let err = VerificationError::expired("at time X");
-        assert_eq!(format!("{err}"), "[payment-expired] at time X");
+        assert_eq!(format!("{err}"), "at time X");
+        assert_eq!(err.code, Some("payment-expired"));
     }
 
     #[test]

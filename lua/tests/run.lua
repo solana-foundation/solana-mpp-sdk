@@ -6,6 +6,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+require('tests.network_check_spec')
 require('tests.core_spec')
 require('tests.server_spec')
 require('tests.solana_verify_spec')
