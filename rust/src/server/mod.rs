@@ -1233,10 +1233,15 @@ mod tests {
         // prepend `[<code>]` — that's debug noise that leaks log-line
         // formatting into UI surfaces (the "Payment rejected by verifier"
         // notice in the pay CLI being the original report).
-        let err = VerificationError::wrong_network("Signed against localnet but the server expects mainnet.");
+        let err = VerificationError::wrong_network(
+            "Signed against localnet but the server expects mainnet.",
+        );
         let displayed = err.to_string();
         assert!(!displayed.starts_with("["), "leading bracket: {displayed}");
-        assert!(!displayed.contains("[wrong-network]"), "code in display: {displayed}");
+        assert!(
+            !displayed.contains("[wrong-network]"),
+            "code in display: {displayed}"
+        );
         assert_eq!(
             displayed,
             "Signed against localnet but the server expects mainnet."
@@ -1248,11 +1253,10 @@ mod tests {
 
     #[test]
     fn network_check_localnet_with_surfpool_hash_ok() {
-        assert!(check_network_blockhash(
-            "localnet",
-            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad"
-        )
-        .is_ok());
+        assert!(
+            check_network_blockhash("localnet", "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1263,31 +1267,26 @@ mod tests {
 
     #[test]
     fn network_check_mainnet_with_real_hash_ok() {
-        assert!(check_network_blockhash(
-            "mainnet",
-            "9zrUHnA1nCByPksy3aL8tQ47vqdaG2vnFs4HrxgcZj4F"
-        )
-        .is_ok());
+        assert!(
+            check_network_blockhash("mainnet", "9zrUHnA1nCByPksy3aL8tQ47vqdaG2vnFs4HrxgcZj4F")
+                .is_ok()
+        );
     }
 
     #[test]
     fn network_check_devnet_with_real_hash_ok() {
-        assert!(check_network_blockhash(
-            "devnet",
-            "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N"
-        )
-        .is_ok());
+        assert!(
+            check_network_blockhash("devnet", "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N")
+                .is_ok()
+        );
     }
 
     // The actual bug surface: Surfpool-signed hash on a non-localnet server.
 
     #[test]
     fn network_check_mainnet_rejects_surfpool_hash() {
-        let err = check_network_blockhash(
-            "mainnet",
-            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad",
-        )
-        .unwrap_err();
+        let err = check_network_blockhash("mainnet", "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad")
+            .unwrap_err();
         assert_eq!(err.code, Some("wrong-network"));
         assert!(!err.retryable);
         // Message should name both sides of the mismatch + give an
@@ -1311,11 +1310,8 @@ mod tests {
 
     #[test]
     fn network_check_devnet_rejects_surfpool_hash() {
-        let err = check_network_blockhash(
-            "devnet",
-            "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad",
-        )
-        .unwrap_err();
+        let err = check_network_blockhash("devnet", "SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx1892bcad")
+            .unwrap_err();
         assert_eq!(err.code, Some("wrong-network"));
         assert!(err.message.contains("server expects devnet"));
     }
