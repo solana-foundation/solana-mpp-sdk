@@ -20,7 +20,7 @@
 
 pub mod html;
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
@@ -625,13 +625,20 @@ impl Mpp {
         })?;
 
         let is_native_sol = request.currency.to_uppercase() == "SOL";
-
         let instructions = extract_parsed_instructions(&tx)?;
 
         if is_native_sol {
             verify_sol_transfers(&instructions, recipient, primary_amount, splits)?;
         } else {
-            verify_spl_transfers(&instructions, recipient, primary_amount, splits)?;
+            let expected_mint =
+                resolve_expected_mint(&request.currency, method_details.network.as_deref())?;
+            verify_spl_transfers(
+                &instructions,
+                recipient,
+                &expected_mint.to_string(),
+                primary_amount,
+                splits,
+            )?;
         }
 
         Ok(())
@@ -734,9 +741,16 @@ fn verify_transaction_pre_broadcast(
 
     let is_native_sol = request.currency.to_uppercase() == "SOL";
     let account_keys = &tx.message.account_keys;
+    let mut matched_instruction_indexes = HashSet::new();
 
     if is_native_sol {
-        verify_sol_transfer_instructions(tx, account_keys, &recipient_pk, primary_amount)?;
+        verify_sol_transfer_instructions(
+            tx,
+            account_keys,
+            &recipient_pk,
+            primary_amount,
+            &mut matched_instruction_indexes,
+        )?;
         for split in splits {
             let split_pk = Pubkey::from_str(&split.recipient).map_err(|e| {
                 VerificationError::invalid_recipient(format!("Invalid split recipient: {e}"))
@@ -745,10 +759,25 @@ fn verify_transaction_pre_broadcast(
                 .amount
                 .parse()
                 .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
-            verify_sol_transfer_instructions(tx, account_keys, &split_pk, amt)?;
+            verify_sol_transfer_instructions(
+                tx,
+                account_keys,
+                &split_pk,
+                amt,
+                &mut matched_instruction_indexes,
+            )?;
         }
     } else {
-        verify_spl_transfer_instructions(tx, account_keys, &recipient_pk, primary_amount)?;
+        let expected_mint =
+            resolve_expected_mint(&request.currency, method_details.network.as_deref())?;
+        verify_spl_transfer_instructions(
+            tx,
+            account_keys,
+            &recipient_pk,
+            &expected_mint,
+            primary_amount,
+            &mut matched_instruction_indexes,
+        )?;
         for split in splits {
             let split_pk = Pubkey::from_str(&split.recipient).map_err(|e| {
                 VerificationError::invalid_recipient(format!("Invalid split recipient: {e}"))
@@ -757,7 +786,14 @@ fn verify_transaction_pre_broadcast(
                 .amount
                 .parse()
                 .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
-            verify_spl_transfer_instructions(tx, account_keys, &split_pk, amt)?;
+            verify_spl_transfer_instructions(
+                tx,
+                account_keys,
+                &split_pk,
+                &expected_mint,
+                amt,
+                &mut matched_instruction_indexes,
+            )?;
         }
     }
 
@@ -770,10 +806,14 @@ fn verify_sol_transfer_instructions(
     account_keys: &[Pubkey],
     recipient: &Pubkey,
     amount: u64,
+    matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
     let system_program = Pubkey::from_str(programs::SYSTEM_PROGRAM).unwrap();
 
-    for ix in &tx.message.instructions {
+    for (index, ix) in tx.message.instructions.iter().enumerate() {
+        if matched_instruction_indexes.contains(&index) {
+            continue;
+        }
         let program_id = account_keys
             .get(ix.program_id_index as usize)
             .ok_or_else(|| VerificationError::invalid_payload("Invalid program_id_index"))?;
@@ -798,6 +838,7 @@ fn verify_sol_transfer_instructions(
             .get(ix.accounts[1] as usize)
             .ok_or_else(|| VerificationError::invalid_payload("Invalid destination index"))?;
         if dest == recipient && ix_amount == amount {
+            matched_instruction_indexes.insert(index);
             return Ok(());
         }
     }
@@ -811,13 +852,18 @@ fn verify_spl_transfer_instructions(
     tx: &Transaction,
     account_keys: &[Pubkey],
     recipient: &Pubkey,
+    expected_mint: &Pubkey,
     amount: u64,
+    matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
     let token_program = Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap();
     let token_2022_program = Pubkey::from_str(programs::TOKEN_2022_PROGRAM).unwrap();
     let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
 
-    for ix in &tx.message.instructions {
+    for (index, ix) in tx.message.instructions.iter().enumerate() {
+        if matched_instruction_indexes.contains(&index) {
+            continue;
+        }
         let program_id = account_keys
             .get(ix.program_id_index as usize)
             .ok_or_else(|| VerificationError::invalid_payload("Invalid program_id_index"))?;
@@ -846,12 +892,16 @@ fn verify_spl_transfer_instructions(
         let mint = account_keys
             .get(ix.accounts[1] as usize)
             .ok_or_else(|| VerificationError::invalid_payload("Invalid mint index"))?;
+        if mint != expected_mint {
+            continue;
+        }
         // Derive expected ATA: PDA([owner, token_program, mint], ata_program)
         let (expected_ata, _) = Pubkey::find_program_address(
             &[recipient.as_ref(), program_id.as_ref(), mint.as_ref()],
             &ata_program,
         );
         if dest_ata == &expected_ata {
+            matched_instruction_indexes.insert(index);
             return Ok(());
         }
     }
@@ -868,13 +918,25 @@ fn verify_sol_transfers(
     primary_amount: u64,
     splits: &[Split],
 ) -> Result<(), VerificationError> {
-    find_sol_transfer(instructions, recipient, primary_amount)?;
+    let mut matched_instruction_indexes = HashSet::new();
+    find_sol_transfer(
+        instructions,
+        recipient,
+        primary_amount,
+        &mut matched_instruction_indexes,
+    )?;
     for split in splits {
         let amt: u64 = split
             .amount
             .parse()
             .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
-        find_sol_transfer(instructions, &split.recipient, amt).map_err(|_| {
+        find_sol_transfer(
+            instructions,
+            &split.recipient,
+            amt,
+            &mut matched_instruction_indexes,
+        )
+        .map_err(|_| {
             VerificationError::invalid_amount(format!(
                 "Missing split transfer to {}",
                 split.recipient
@@ -888,8 +950,12 @@ fn find_sol_transfer(
     instructions: &[serde_json::Value],
     recipient: &str,
     amount: u64,
+    matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
-    for ix in instructions {
+    for (index, ix) in instructions.iter().enumerate() {
+        if matched_instruction_indexes.contains(&index) {
+            continue;
+        }
         if let Some(parsed) = ix.get("parsed").and_then(|p| p.as_object()) {
             if parsed.get("type").and_then(|t| t.as_str()) != Some("transfer") {
                 continue;
@@ -901,6 +967,7 @@ fn find_sol_transfer(
                     .unwrap_or("");
                 let lamports = info.get("lamports").and_then(|l| l.as_u64()).unwrap_or(0);
                 if dest == recipient && lamports == amount {
+                    matched_instruction_indexes.insert(index);
                     return Ok(());
                 }
             }
@@ -914,16 +981,31 @@ fn find_sol_transfer(
 fn verify_spl_transfers(
     instructions: &[serde_json::Value],
     recipient: &str,
+    mint: &str,
     primary_amount: u64,
     splits: &[Split],
 ) -> Result<(), VerificationError> {
-    find_spl_transfer(instructions, recipient, primary_amount)?;
+    let mut matched_instruction_indexes = HashSet::new();
+    find_spl_transfer(
+        instructions,
+        recipient,
+        mint,
+        primary_amount,
+        &mut matched_instruction_indexes,
+    )?;
     for split in splits {
         let amt: u64 = split
             .amount
             .parse()
             .map_err(|_| VerificationError::invalid_amount("Invalid split amount"))?;
-        find_spl_transfer(instructions, &split.recipient, amt).map_err(|_| {
+        find_spl_transfer(
+            instructions,
+            &split.recipient,
+            mint,
+            amt,
+            &mut matched_instruction_indexes,
+        )
+        .map_err(|_| {
             VerificationError::invalid_amount(format!(
                 "Missing split SPL transfer to {}",
                 split.recipient
@@ -936,9 +1018,14 @@ fn verify_spl_transfers(
 fn find_spl_transfer(
     instructions: &[serde_json::Value],
     recipient: &str,
+    expected_mint: &str,
     amount: u64,
+    matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
-    for ix in instructions {
+    for (index, ix) in instructions.iter().enumerate() {
+        if matched_instruction_indexes.contains(&index) {
+            continue;
+        }
         let program = ix.get("programId").and_then(|p| p.as_str()).unwrap_or("");
         if program != programs::TOKEN_PROGRAM && program != programs::TOKEN_2022_PROGRAM {
             continue;
@@ -962,7 +1049,8 @@ fn find_spl_transfer(
                         .and_then(|d| d.as_str())
                         .unwrap_or("");
                     let mint = info.get("mint").and_then(|m| m.as_str()).unwrap_or("");
-                    if verify_ata_owner(dest, recipient, mint, program) {
+                    if mint == expected_mint && verify_ata_owner(dest, recipient, mint, program) {
+                        matched_instruction_indexes.insert(index);
                         return Ok(());
                     }
                 }
@@ -999,6 +1087,31 @@ fn verify_ata_owner(
         &ata_program,
     );
     expected_ata == ata_pk
+}
+
+fn resolve_expected_mint(
+    currency: &str,
+    network: Option<&str>,
+) -> Result<Pubkey, VerificationError> {
+    let mint = match currency.to_uppercase().as_str() {
+        "SOL" => {
+            return Err(VerificationError::invalid_payload(
+                "SOL does not use an SPL mint".to_string(),
+            ));
+        }
+        "USDC" => match network {
+            Some("devnet") => "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+            _ => "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        },
+        "PYUSD" => match network {
+            Some("devnet") => "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM",
+            _ => "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+        },
+        _ => currency,
+    };
+
+    Pubkey::from_str(mint)
+        .map_err(|e| VerificationError::invalid_payload(format!("Invalid currency/mint: {e}")))
 }
 
 /// Extract parsed instructions from an encoded transaction.
@@ -2489,6 +2602,7 @@ mod tests {
 
     #[test]
     fn find_sol_transfer_success() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "parsed": {
                 "type": "transfer",
@@ -2498,11 +2612,14 @@ mod tests {
                 }
             }
         })];
-        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_ok());
+        assert!(
+            find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000, &mut matched).is_ok()
+        );
     }
 
     #[test]
     fn find_sol_transfer_wrong_amount() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "parsed": {
                 "type": "transfer",
@@ -2512,11 +2629,14 @@ mod tests {
                 }
             }
         })];
-        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+        assert!(
+            find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000, &mut matched).is_err()
+        );
     }
 
     #[test]
     fn find_sol_transfer_wrong_recipient() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "parsed": {
                 "type": "transfer",
@@ -2526,16 +2646,20 @@ mod tests {
                 }
             }
         })];
-        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+        assert!(
+            find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000, &mut matched).is_err()
+        );
     }
 
     #[test]
     fn find_sol_transfer_empty_instructions() {
-        assert!(find_sol_transfer(&[], "RecipientPubkey", 1_000_000).is_err());
+        let mut matched = HashSet::new();
+        assert!(find_sol_transfer(&[], "RecipientPubkey", 1_000_000, &mut matched).is_err());
     }
 
     #[test]
     fn find_sol_transfer_ignores_non_transfer_types() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "parsed": {
                 "type": "createAccount",
@@ -2545,7 +2669,9 @@ mod tests {
                 }
             }
         })];
-        assert!(find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000).is_err());
+        assert!(
+            find_sol_transfer(&instructions, "RecipientPubkey", 1_000_000, &mut matched).is_err()
+        );
     }
 
     #[test]
@@ -2607,10 +2733,54 @@ mod tests {
         assert!(err.message.contains("Missing split transfer"));
     }
 
+    #[test]
+    fn verify_sol_transfers_rejects_reusing_single_instruction_for_duplicate_splits() {
+        let instructions = vec![
+            serde_json::json!({
+                "parsed": {
+                    "type": "transfer",
+                    "info": {
+                        "destination": "PrimaryRecipient",
+                        "lamports": 800000
+                    }
+                }
+            }),
+            serde_json::json!({
+                "parsed": {
+                    "type": "transfer",
+                    "info": {
+                        "destination": "SplitRecipient",
+                        "lamports": 100000
+                    }
+                }
+            }),
+        ];
+
+        let splits = vec![
+            Split {
+                recipient: "SplitRecipient".to_string(),
+                amount: "100000".to_string(),
+                label: None,
+                memo: None,
+            },
+            Split {
+                recipient: "SplitRecipient".to_string(),
+                amount: "100000".to_string(),
+                label: None,
+                memo: None,
+            },
+        ];
+
+        let err =
+            verify_sol_transfers(&instructions, "PrimaryRecipient", 800000, &splits).unwrap_err();
+        assert!(err.message.contains("Missing split transfer"));
+    }
+
     // ── find_spl_transfer tests ──
 
     #[test]
     fn find_spl_transfer_success() {
+        let mut matched = HashSet::new();
         let owner = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY";
         let mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         let tp = programs::TOKEN_PROGRAM;
@@ -2639,11 +2809,12 @@ mod tests {
             }
         })];
 
-        assert!(find_spl_transfer(&instructions, owner, 1_000_000).is_ok());
+        assert!(find_spl_transfer(&instructions, owner, mint, 1_000_000, &mut matched).is_ok());
     }
 
     #[test]
     fn find_spl_transfer_wrong_program() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "programId": "WrongProgram111111111111111111111111111111",
             "parsed": {
@@ -2657,11 +2828,19 @@ mod tests {
                 }
             }
         })];
-        assert!(find_spl_transfer(&instructions, "SomeOwner", 1_000_000).is_err());
+        assert!(find_spl_transfer(
+            &instructions,
+            "SomeOwner",
+            "SomeMint",
+            1_000_000,
+            &mut matched
+        )
+        .is_err());
     }
 
     #[test]
     fn find_spl_transfer_wrong_type() {
+        let mut matched = HashSet::new();
         let instructions = vec![serde_json::json!({
             "programId": programs::TOKEN_PROGRAM,
             "parsed": {
@@ -2675,7 +2854,119 @@ mod tests {
                 }
             }
         })];
-        assert!(find_spl_transfer(&instructions, "SomeOwner", 1_000_000).is_err());
+        assert!(find_spl_transfer(
+            &instructions,
+            "SomeOwner",
+            "SomeMint",
+            1_000_000,
+            &mut matched
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn find_spl_transfer_wrong_mint() {
+        let mut matched = HashSet::new();
+        let owner = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY";
+        let mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let wrong_mint = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
+        let tp = programs::TOKEN_PROGRAM;
+
+        let owner_pk = Pubkey::from_str(owner).unwrap();
+        let mint_pk = Pubkey::from_str(mint).unwrap();
+        let tp_pk = Pubkey::from_str(tp).unwrap();
+        let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
+        let (dest_ata, _) = Pubkey::find_program_address(
+            &[owner_pk.as_ref(), tp_pk.as_ref(), mint_pk.as_ref()],
+            &ata_program,
+        );
+
+        let instructions = vec![serde_json::json!({
+            "programId": tp,
+            "parsed": {
+                "type": "transferChecked",
+                "info": {
+                    "destination": dest_ata.to_string(),
+                    "mint": mint,
+                    "tokenAmount": {
+                        "amount": "1000000"
+                    }
+                }
+            }
+        })];
+
+        assert!(
+            find_spl_transfer(&instructions, owner, wrong_mint, 1_000_000, &mut matched).is_err()
+        );
+    }
+
+    #[test]
+    fn verify_spl_transfers_rejects_reusing_single_instruction_for_duplicate_splits() {
+        let owner = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY";
+        let split_owner = "3pF8QfAS8gM8f3yr8zvHqZqMFKmMZxN4n3K7uP5Q4L8S";
+        let mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let tp = programs::TOKEN_PROGRAM;
+
+        let ata_program = Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap();
+        let owner_pk = Pubkey::from_str(owner).unwrap();
+        let split_owner_pk = Pubkey::from_str(split_owner).unwrap();
+        let mint_pk = Pubkey::from_str(mint).unwrap();
+        let tp_pk = Pubkey::from_str(tp).unwrap();
+        let (owner_ata, _) = Pubkey::find_program_address(
+            &[owner_pk.as_ref(), tp_pk.as_ref(), mint_pk.as_ref()],
+            &ata_program,
+        );
+        let (split_ata, _) = Pubkey::find_program_address(
+            &[split_owner_pk.as_ref(), tp_pk.as_ref(), mint_pk.as_ref()],
+            &ata_program,
+        );
+
+        let instructions = vec![
+            serde_json::json!({
+                "programId": tp,
+                "parsed": {
+                    "type": "transferChecked",
+                    "info": {
+                        "destination": owner_ata.to_string(),
+                        "mint": mint,
+                        "tokenAmount": {
+                            "amount": "800000"
+                        }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "programId": tp,
+                "parsed": {
+                    "type": "transferChecked",
+                    "info": {
+                        "destination": split_ata.to_string(),
+                        "mint": mint,
+                        "tokenAmount": {
+                            "amount": "100000"
+                        }
+                    }
+                }
+            }),
+        ];
+
+        let splits = vec![
+            Split {
+                recipient: split_owner.to_string(),
+                amount: "100000".to_string(),
+                label: None,
+                memo: None,
+            },
+            Split {
+                recipient: split_owner.to_string(),
+                amount: "100000".to_string(),
+                label: None,
+                memo: None,
+            },
+        ];
+
+        let err = verify_spl_transfers(&instructions, owner, mint, 800000, &splits).unwrap_err();
+        assert!(err.message.contains("Missing split SPL transfer"));
     }
 
     // ── verify_ata_owner edge cases ──

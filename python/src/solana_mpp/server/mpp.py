@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import base64
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,7 +17,7 @@ from solana_mpp._errors import (
 )
 from solana_mpp._types import PaymentChallenge, PaymentCredential, Receipt
 from solana_mpp.protocol.intents import ChargeRequest, parse_units
-from solana_mpp.protocol.solana import CredentialPayload, MethodDetails, default_rpc_url, is_native_sol
+from solana_mpp.protocol.solana import CredentialPayload, MethodDetails, default_rpc_url, is_native_sol, resolve_mint
 from solana_mpp.server.network_check import check_network_blockhash
 from solana_mpp.store import MemoryStore, Store
 
@@ -24,6 +26,132 @@ logger = logging.getLogger(__name__)
 _DEFAULT_REALM = "MPP Payment"
 _SECRET_KEY_ENV_VAR = "MPP_SECRET_KEY"
 _CONSUMED_PREFIX = "solana-charge:consumed:"
+
+
+def _build_expected_transfers(request: ChargeRequest, details: MethodDetails) -> list[tuple[str, int]]:
+    total_amount = int(request.amount)
+    split_total = sum(int(split.amount) for split in details.splits)
+    primary_amount = total_amount - split_total
+    if primary_amount <= 0:
+        raise PaymentError(
+            "splits consume the entire amount — primary recipient must receive a positive amount",
+            code="splits-exceed-amount",
+        )
+
+    expected = [(request.recipient, primary_amount)]
+    for split in details.splits:
+        expected.append((split.recipient, int(split.amount)))
+    return expected
+
+
+def _verify_parsed_sol_transfers(instructions: list[dict[str, Any]], request: ChargeRequest, details: MethodDetails) -> None:
+    expected = _build_expected_transfers(request, details)
+    transfers = [
+        instruction
+        for instruction in instructions
+        if instruction.get("program") == "system" and (instruction.get("parsed") or {}).get("type") == "transfer"
+    ]
+
+    for recipient, amount in expected:
+        match_index = next(
+            (
+                index
+                for index, transfer in enumerate(transfers)
+                if ((transfer.get("parsed") or {}).get("info") or {}).get("destination") == recipient
+                and str(((transfer.get("parsed") or {}).get("info") or {}).get("lamports")) == str(amount)
+            ),
+            -1,
+        )
+        if match_index == -1:
+            raise PaymentError(f"no matching SOL transfer for {recipient}", code="no-transfer")
+        transfers.pop(match_index)
+
+
+def _verify_parsed_spl_transfers(
+    instructions: list[dict[str, Any]],
+    request: ChargeRequest,
+    details: MethodDetails,
+    fetch_token_account,
+) -> None:
+    if fetch_token_account is None:
+        raise PaymentError("fetch_token_account callback is required", code="invalid-payload-type")
+
+    expected = _build_expected_transfers(request, details)
+    program_id = details.token_program or "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    mint = resolve_mint(request.currency, details.network)
+    transfers = [
+        instruction
+        for instruction in instructions
+        if instruction.get("programId") == program_id
+        and (instruction.get("parsed") or {}).get("type") == "transferChecked"
+    ]
+
+    for recipient, amount in expected:
+        match_index = next(
+            (
+                index
+                for index, transfer in enumerate(transfers)
+                if ((transfer.get("parsed") or {}).get("info") or {}).get("mint") == mint
+                and str((((transfer.get("parsed") or {}).get("info") or {}).get("tokenAmount") or {}).get("amount"))
+                == str(amount)
+                and _token_account_matches(
+                    fetch_token_account(((transfer.get("parsed") or {}).get("info") or {}).get("destination")),
+                    recipient,
+                    mint,
+                )
+            ),
+            -1,
+        )
+        if match_index == -1:
+            raise PaymentError(f"no matching token transfer for {recipient}", code="no-transfer")
+        transfers.pop(match_index)
+
+
+def _token_account_matches(account: Any, recipient: str, mint: str) -> bool:
+    if not account:
+        return False
+    owner = account.get("owner") if isinstance(account, dict) else getattr(account, "owner", None)
+    account_mint = account.get("mint") if isinstance(account, dict) else getattr(account, "mint", None)
+    return owner == recipient and account_mint == mint
+
+
+def _rpc_value(response: Any) -> Any:
+    if response is None:
+        return None
+    if isinstance(response, dict):
+        return response.get("value", response)
+    return getattr(response, "value", response)
+
+
+def _json_like(value: Any) -> Any:
+    if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "to_json"):
+        return json.loads(value.to_json())
+    if hasattr(value, "__dict__"):
+        return {key: _json_like(val) for key, val in vars(value).items()}
+    return value
+
+
+def _transaction_dict(response: Any) -> dict[str, Any] | None:
+    value = _rpc_value(response)
+    if value is None:
+        return None
+    data = _json_like(value)
+    if isinstance(data, dict) and "transaction" in data:
+        return data
+    return None
+
+
+def _status_ok(response: Any) -> bool:
+    value = _rpc_value(response)
+    data = _json_like(value)
+    if isinstance(data, list):
+        for entry in data:
+            if entry and entry.get("err") is None:
+                return True
+        return False
+    return data is not None
 
 
 def _extract_recent_blockhash(transaction_b64: str) -> str:
@@ -213,6 +341,13 @@ class Mpp:
         """Verify a pull-mode transaction credential."""
         if not payload.transaction:
             raise PaymentError("missing transaction data in credential payload", code="missing-transaction")
+        if self._rpc is None:
+            raise PaymentError("rpc client is required for transaction verification", code="invalid-config")
+        if details.fee_payer:
+            raise PaymentError(
+                'type="transaction" with fee sponsorship is not yet supported in python',
+                code="invalid-payload-type",
+            )
 
         # Reject up-front if the client signed against the wrong network
         # (e.g. mainnet keypair pointed at a sandbox-configured server, or
@@ -240,18 +375,24 @@ class Mpp:
             raise ReplayError()
 
         try:
-            # TODO: full verification pipeline using solana-py/solders
-            # 1. Deserialize transaction
-            # 2. Optionally co-sign with fee payer
-            # 3. Simulate
-            # 4. Send
-            # 5. Confirm
-            # 6. Verify on-chain transfers
-            logger.info("Transaction verification pending full solana-py integration")
+            raw_tx = base64.b64decode(payload.transaction)
+            send_resp = await self._rpc.send_raw_transaction(raw_tx)
+            signature = str(_rpc_value(send_resp))
+            from solders.signature import Signature
 
+            sig = Signature.from_string(signature)
+            status_resp = await self._rpc.confirm_transaction(sig)
+            if not _status_ok(status_resp):
+                raise PaymentError("transaction not confirmed", code="transaction-not-found")
+
+            tx_resp = await self._rpc.get_transaction(sig, encoding="jsonParsed", max_supported_transaction_version=0)
+            tx = _transaction_dict(tx_resp)
+            if tx is None:
+                raise PaymentError("transaction not found or not yet confirmed", code="transaction-not-found")
+            self._verify_confirmed_transaction(tx, request, details)
             return Receipt.success(
                 method="solana",
-                reference=payload.transaction[:64],
+                reference=signature,
                 challenge_id=credential.challenge.id,
                 external_id=request.external_id,
             )
@@ -269,6 +410,8 @@ class Mpp:
         """Verify a push-mode signature credential."""
         if not payload.signature:
             raise PaymentError("missing signature in credential payload", code="missing-signature")
+        if self._rpc is None:
+            raise PaymentError("rpc client is required for signature verification", code="invalid-config")
 
         consumed_key = _CONSUMED_PREFIX + payload.signature
         inserted = await self._store.put_if_absent(consumed_key, True)
@@ -276,10 +419,14 @@ class Mpp:
             raise ReplayError()
 
         try:
-            # TODO: full verification pipeline using solana-py/solders
-            # 1. Fetch transaction by signature
-            # 2. Verify on-chain transfers match challenge
-            logger.info("Signature verification pending full solana-py integration")
+            from solders.signature import Signature
+
+            sig = Signature.from_string(payload.signature)
+            tx_resp = await self._rpc.get_transaction(sig, encoding="jsonParsed", max_supported_transaction_version=0)
+            tx = _transaction_dict(tx_resp)
+            if tx is None:
+                raise PaymentError("transaction not found or not yet confirmed", code="transaction-not-found")
+            self._verify_confirmed_transaction(tx, request, details)
 
             return Receipt.success(
                 method="solana",
@@ -290,3 +437,19 @@ class Mpp:
         except Exception:
             await self._store.delete(consumed_key)
             raise
+
+    def _verify_confirmed_transaction(self, tx: dict[str, Any], request: ChargeRequest, details: MethodDetails) -> None:
+        meta = tx.get("meta") or {}
+        if meta.get("err") is not None:
+            raise PaymentError(f"transaction failed on-chain: {meta['err']}", code="transaction-failed")
+
+        instructions = ((tx.get("transaction") or {}).get("message") or {}).get("instructions") or []
+        if is_native_sol(request.currency):
+            _verify_parsed_sol_transfers(instructions, request, details)
+        else:
+            _verify_parsed_spl_transfers(
+                instructions,
+                request,
+                details,
+                getattr(self._rpc, "get_token_account", None),
+            )

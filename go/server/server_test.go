@@ -7,9 +7,11 @@ import (
 	"time"
 
 	solana "github.com/gagliardetto/solana-go"
+	"github.com/gagliardetto/solana-go/programs/token"
 
 	"github.com/solana-foundation/mpp-sdk/go"
 	"github.com/solana-foundation/mpp-sdk/go/client"
+	"github.com/solana-foundation/mpp-sdk/go/internal/solanautil"
 	"github.com/solana-foundation/mpp-sdk/go/internal/testutil"
 	"github.com/solana-foundation/mpp-sdk/go/protocol"
 )
@@ -42,6 +44,19 @@ type testutilConfig struct {
 	Recipient string
 	Client    solana.PrivateKey
 	SecretKey string
+}
+
+func newTestTransaction(t *testing.T, payer solana.PrivateKey, instructions ...solana.Instruction) *solana.Transaction {
+	t.Helper()
+	tx, err := solana.NewTransaction(
+		instructions,
+		solana.Hash{},
+		solana.TransactionPayer(payer.PublicKey()),
+	)
+	if err != nil {
+		t.Fatalf("new transaction failed: %v", err)
+	}
+	return tx
 }
 
 func TestChargeBuildsChallenge(t *testing.T) {
@@ -233,6 +248,134 @@ func TestVerifyCredentialUSDCSymbolSignatureSuccess(t *testing.T) {
 	}
 	if receipt.Status != mpp.ReceiptStatusSuccess {
 		t.Fatalf("unexpected receipt: %#v", receipt)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeDuplicateSOLSplitsRequireDistinctInstructions(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+	splitRecipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 800)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	splitIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), splitRecipient, 100)
+	if err != nil {
+		t.Fatalf("build split transfer failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, splitIx)
+	err = verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, protocol.MethodDetails{
+		Splits: []protocol.Split{
+			{Recipient: splitRecipient.String(), Amount: "100"},
+			{Recipient: splitRecipient.String(), Amount: "100"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate split reuse to fail")
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeSameRecipientSOLSplitsMatchByAmount(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 800)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	splitIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 200)
+	if err != nil {
+		t.Fatalf("build split transfer failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, splitIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, protocol.MethodDetails{
+		Splits: []protocol.Split{{Recipient: recipient.String(), Amount: "200"}},
+	}); err != nil {
+		t.Fatalf("expected same-recipient SOL transfers to pass: %v", err)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeSameRecipientSPLSplitsMatchByAmount(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+
+	sourceATA, err := solanautil.FindAssociatedTokenAddressWithProgram(payer.PublicKey(), mint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find source ata failed: %v", err)
+	}
+	recipientATA, err := solanautil.FindAssociatedTokenAddressWithProgram(recipient, mint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find recipient ata failed: %v", err)
+	}
+
+	primaryIx, err := token.NewTransferCheckedInstruction(
+		800,
+		6,
+		sourceATA,
+		mint,
+		recipientATA,
+		payer.PublicKey(),
+		nil,
+	).ValidateAndBuild()
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	splitIx, err := token.NewTransferCheckedInstruction(
+		200,
+		6,
+		sourceATA,
+		mint,
+		recipientATA,
+		payer.PublicKey(),
+		nil,
+	).ValidateAndBuild()
+	if err != nil {
+		t.Fatalf("build split transfer failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, splitIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, protocol.MethodDetails{
+		Splits: []protocol.Split{{Recipient: recipient.String(), Amount: "200"}},
+	}); err != nil {
+		t.Fatalf("expected same-recipient SPL transfers to pass: %v", err)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeRejectsWrongSPLMint(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+	wrongMint := testutil.NewPrivateKey().PublicKey()
+
+	sourceATA, err := solanautil.FindAssociatedTokenAddressWithProgram(payer.PublicKey(), wrongMint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find source ata failed: %v", err)
+	}
+	recipientATA, err := solanautil.FindAssociatedTokenAddressWithProgram(recipient, wrongMint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find recipient ata failed: %v", err)
+	}
+
+	ix, err := token.NewTransferCheckedInstruction(
+		1000,
+		6,
+		sourceATA,
+		wrongMint,
+		recipientATA,
+		payer.PublicKey(),
+		nil,
+	).ValidateAndBuild()
+	if err != nil {
+		t.Fatalf("build transfer failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, ix)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, protocol.MethodDetails{}); err == nil {
+		t.Fatal("expected wrong mint to fail")
 	}
 }
 

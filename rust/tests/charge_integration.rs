@@ -12,6 +12,7 @@ use solana_mpp::{format_authorization, parse_www_authenticate};
 use solana_rpc_client::rpc_client::RpcClient;
 use std::sync::Arc;
 use surfpool_sdk::{Keypair, Signer, Surfnet};
+use tokio::time::{sleep, Duration};
 
 /// Create a funded signer using surfpool cheatcodes.
 fn fund_signer(surfnet: &Surfnet) -> Arc<dyn solana_mpp::solana_keychain::SolanaSigner> {
@@ -27,12 +28,25 @@ fn fund_signer(surfnet: &Surfnet) -> Arc<dyn solana_mpp::solana_keychain::Solana
     Arc::new(signer)
 }
 
+async fn wait_for_surfnet(surfnet: &Surfnet) {
+    let rpc = RpcClient::new(surfnet.rpc_url().to_string());
+    for _ in 0..300 {
+        if rpc.get_latest_blockhash().is_ok() {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("surfnet rpc did not become ready in time");
+}
+
 // ─── SOL charge flow ───────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_full_flow() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&recipient.pubkey(), 1_000_000_000)
@@ -72,10 +86,12 @@ async fn sol_charge_full_flow() {
     assert!(!receipt.reference.is_empty());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_wrong_amount_rejected_before_broadcast() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&recipient.pubkey(), 1_000_000_000)
@@ -139,11 +155,13 @@ async fn sol_charge_wrong_amount_rejected_before_broadcast() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_wrong_recipient_rejected_before_broadcast() {
     let real_recipient = Keypair::new();
     let wrong_recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&real_recipient.pubkey(), 1_000_000_000)
@@ -201,10 +219,12 @@ async fn sol_charge_wrong_recipient_rejected_before_broadcast() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_replay_rejected() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&recipient.pubkey(), 1_000_000_000)
@@ -250,10 +270,12 @@ async fn sol_charge_replay_rejected() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_expired_challenge_rejected() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&recipient.pubkey(), 1_000_000_000)
@@ -299,10 +321,12 @@ async fn sol_charge_expired_challenge_rejected() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn sol_charge_www_authenticate_roundtrip() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::start().await.unwrap();
+    wait_for_surfnet(&surfnet).await;
     surfnet
         .cheatcodes()
         .fund_sol(&recipient.pubkey(), 1_000_000_000)
@@ -345,7 +369,8 @@ async fn sol_charge_www_authenticate_roundtrip() {
 
 // ─── USDC charge flow ──────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn usdc_charge_full_flow() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::builder()
@@ -353,6 +378,7 @@ async fn usdc_charge_full_flow() {
         .start()
         .await
         .unwrap();
+    wait_for_surfnet(&surfnet).await;
 
     surfnet
         .cheatcodes()
@@ -427,7 +453,8 @@ async fn usdc_charge_full_flow() {
     assert_eq!(amount, 1_000_000, "Recipient should have 1 USDC");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn usdc_charge_wrong_amount_no_broadcast() {
     let recipient = Keypair::new();
     let surfnet = Surfnet::builder()
@@ -435,6 +462,7 @@ async fn usdc_charge_wrong_amount_no_broadcast() {
         .start()
         .await
         .unwrap();
+    wait_for_surfnet(&surfnet).await;
 
     surfnet
         .cheatcodes()

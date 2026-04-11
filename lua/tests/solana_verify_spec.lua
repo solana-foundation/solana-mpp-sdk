@@ -235,6 +235,110 @@ t.test('signature verifier supports split transfers', function()
   t.assert_equal(result.reference, 'sig-123')
 end)
 
+t.test('signature verifier matches same-recipient SOL transfers by amount', function()
+  local context = signature_context({
+    request = {
+      amount = '1000',
+      currency = 'sol',
+      recipient = 'recipient-2',
+      methodDetails = {
+        splits = {
+          { recipient = 'recipient-2', amount = '200' },
+        },
+      },
+    },
+    method_details = {
+      splits = {
+        { recipient = 'recipient-2', amount = '200' },
+      },
+    },
+  })
+  local result = verify.verify_signature(context, {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-2', lamports = '800' } } },
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-2', lamports = '200' } } },
+            },
+          },
+        },
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+end)
+
+t.test('signature verifier matches same-recipient SPL transfers by amount', function()
+  local context = signature_context({
+    request = {
+      amount = '1000',
+      currency = 'mint-1',
+      recipient = 'recipient-2',
+      methodDetails = {
+        tokenProgram = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        splits = {
+          { recipient = 'recipient-2', amount = '200' },
+        },
+      },
+    },
+    method_details = {
+      tokenProgram = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      splits = {
+        { recipient = 'recipient-2', amount = '200' },
+      },
+    },
+  })
+
+  local calls = 0
+  local result = verify.verify_signature(context, {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              {
+                programId = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+                parsed = {
+                  type = 'transferChecked',
+                  info = {
+                    destination = 'token-account-primary',
+                    mint = 'mint-1',
+                    tokenAmount = { amount = '800' },
+                  },
+                },
+              },
+              {
+                programId = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+                parsed = {
+                  type = 'transferChecked',
+                  info = {
+                    destination = 'token-account-split',
+                    mint = 'mint-1',
+                    tokenAmount = { amount = '200' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }
+    end,
+    fetch_token_account = function(_)
+      calls = calls + 1
+      return {
+        owner = 'recipient-2',
+        mint = 'mint-1',
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+  t.assert_equal(calls, 2)
+end)
+
 t.test('signature verifier rejects missing signature', function()
   t.assert_error(function()
     verify.verify_signature(signature_context({

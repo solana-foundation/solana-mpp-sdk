@@ -330,42 +330,42 @@ func (m *Mpp) verifyOnChain(ctx context.Context, signature solana.Signature, req
 }
 
 func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, currency string, recipient solana.PublicKey, details protocol.MethodDetails) error {
-	primaryAmount, err := solanautil.SplitAmounts(amount, details.Splits)
+	expected, err := buildExpectedTransfers(amount, recipient, details)
 	if err != nil {
 		return err
 	}
-	expected := map[string]uint64{recipient.String(): primaryAmount}
-	for _, split := range details.Splits {
-		splitAmount, err := intents.ChargeRequest{Amount: split.Amount}.ParseAmount()
-		if err != nil {
-			return err
-		}
-		expected[split.Recipient] = splitAmount
-	}
 	if isNativeSOL(currency) {
-		seen := map[string]uint64{}
-		for _, compiled := range tx.Message.Instructions {
-			programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
-			if !programID.Equals(solana.SystemProgramID) {
-				continue
+		matched := make([]bool, len(tx.Message.Instructions))
+		for _, want := range expected {
+			found := false
+			for index, compiled := range tx.Message.Instructions {
+				if matched[index] {
+					continue
+				}
+				programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
+				if !programID.Equals(solana.SystemProgramID) {
+					continue
+				}
+				accounts, err := compiled.ResolveInstructionAccounts(&tx.Message)
+				if err != nil {
+					return err
+				}
+				decoded, err := system.DecodeInstruction(accounts, []byte(compiled.Data))
+				if err != nil {
+					continue
+				}
+				transfer, ok := decoded.Impl.(*system.Transfer)
+				if !ok || transfer.Lamports == nil {
+					continue
+				}
+				if transfer.GetRecipientAccount().PublicKey.Equals(want.recipient) && *transfer.Lamports == want.amount {
+					matched[index] = true
+					found = true
+					break
+				}
 			}
-			accounts, err := compiled.ResolveInstructionAccounts(&tx.Message)
-			if err != nil {
-				return err
-			}
-			decoded, err := system.DecodeInstruction(accounts, []byte(compiled.Data))
-			if err != nil {
-				continue
-			}
-			transfer, ok := decoded.Impl.(*system.Transfer)
-			if !ok || transfer.Lamports == nil {
-				continue
-			}
-			seen[transfer.GetRecipientAccount().PublicKey.String()] += *transfer.Lamports
-		}
-		for address, want := range expected {
-			if seen[address] != want {
-				return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching SOL transfer for %s", address))
+			if !found {
+				return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching SOL transfer for %s", want.recipient))
 			}
 		}
 		return nil
@@ -376,61 +376,107 @@ func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, curr
 	if details.TokenProgram == protocol.Token2022Program {
 		expectedProgram = solana.MustPublicKeyFromBase58(protocol.Token2022Program)
 	}
-	seen := map[string]uint64{}
-	for address := range expected {
-		owner := solana.MustPublicKeyFromBase58(address)
-		ata, err := solanautil.FindAssociatedTokenAddressWithProgram(owner, mint, expectedProgram)
-		if err != nil {
-			return err
-		}
-		seen[ata.String()] = 0
+	type tokenExpectation struct {
+		recipient solana.PublicKey
+		ata       solana.PublicKey
+		amount    uint64
 	}
-	for _, compiled := range tx.Message.Instructions {
-		programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
-		if !programID.Equals(expectedProgram) {
-			continue
-		}
-		accounts, err := compiled.ResolveInstructionAccounts(&tx.Message)
+	tokenExpected := make([]tokenExpectation, 0, len(expected))
+	for _, want := range expected {
+		ata, err := solanautil.FindAssociatedTokenAddressWithProgram(want.recipient, mint, expectedProgram)
 		if err != nil {
 			return err
 		}
-		if expectedProgram.Equals(solana.TokenProgramID) {
-			decoded, err := token.DecodeInstruction(accounts, []byte(compiled.Data))
+		tokenExpected = append(tokenExpected, tokenExpectation{
+			recipient: want.recipient,
+			ata:       ata,
+			amount:    want.amount,
+		})
+	}
+	matched := make([]bool, len(tx.Message.Instructions))
+	for _, want := range tokenExpected {
+		found := false
+		for index, compiled := range tx.Message.Instructions {
+			if matched[index] {
+				continue
+			}
+			programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
+			if !programID.Equals(expectedProgram) {
+				continue
+			}
+			accounts, err := compiled.ResolveInstructionAccounts(&tx.Message)
+			if err != nil {
+				return err
+			}
+			if expectedProgram.Equals(solana.TokenProgramID) {
+				decoded, err := token.DecodeInstruction(accounts, []byte(compiled.Data))
+				if err != nil {
+					continue
+				}
+				transfer, ok := decoded.Impl.(*token.TransferChecked)
+				if !ok || transfer.Amount == nil {
+					continue
+				}
+				if !transfer.GetMintAccount().PublicKey.Equals(mint) {
+					continue
+				}
+				if transfer.GetDestinationAccount().PublicKey.Equals(want.ata) && *transfer.Amount == want.amount {
+					matched[index] = true
+					found = true
+					break
+				}
+				continue
+			}
+			decoded, err := token2022.DecodeInstruction(accounts, []byte(compiled.Data))
 			if err != nil {
 				continue
 			}
-			transfer, ok := decoded.Impl.(*token.TransferChecked)
-			if !ok {
+			transfer, ok := decoded.Impl.(*token2022.TransferChecked)
+			if !ok || transfer.Amount == nil {
 				continue
 			}
-			if transfer.Amount != nil {
-				seen[transfer.GetDestinationAccount().PublicKey.String()] += *transfer.Amount
+			if !transfer.GetMintAccount().PublicKey.Equals(mint) {
+				continue
 			}
-			continue
+			if transfer.GetDestinationAccount().PublicKey.Equals(want.ata) && *transfer.Amount == want.amount {
+				matched[index] = true
+				found = true
+				break
+			}
 		}
-		decoded, err := token2022.DecodeInstruction(accounts, []byte(compiled.Data))
-		if err != nil {
-			continue
-		}
-		transfer, ok := decoded.Impl.(*token2022.TransferChecked)
-		if !ok {
-			continue
-		}
-		if transfer.Amount != nil {
-			seen[transfer.GetDestinationAccount().PublicKey.String()] += *transfer.Amount
-		}
-	}
-	for address, want := range expected {
-		owner := solana.MustPublicKeyFromBase58(address)
-		ata, err := solanautil.FindAssociatedTokenAddressWithProgram(owner, mint, expectedProgram)
-		if err != nil {
-			return err
-		}
-		if seen[ata.String()] != want {
-			return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching token transfer for %s", address))
+		if !found {
+			return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching token transfer for %s", want.recipient))
 		}
 	}
 	return nil
+}
+
+type expectedTransfer struct {
+	recipient solana.PublicKey
+	amount    uint64
+}
+
+func buildExpectedTransfers(amount uint64, recipient solana.PublicKey, details protocol.MethodDetails) ([]expectedTransfer, error) {
+	primaryAmount, err := solanautil.SplitAmounts(amount, details.Splits)
+	if err != nil {
+		return nil, err
+	}
+	expected := []expectedTransfer{{recipient: recipient, amount: primaryAmount}}
+	for _, split := range details.Splits {
+		splitAmount, err := intents.ChargeRequest{Amount: split.Amount}.ParseAmount()
+		if err != nil {
+			return nil, err
+		}
+		splitRecipient, err := solana.PublicKeyFromBase58(split.Recipient)
+		if err != nil {
+			return nil, err
+		}
+		expected = append(expected, expectedTransfer{
+			recipient: splitRecipient,
+			amount:    splitAmount,
+		})
+	}
+	return expected, nil
 }
 
 func successReceipt(reference, challengeID, externalID string) mpp.Receipt {

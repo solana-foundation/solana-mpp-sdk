@@ -294,7 +294,7 @@ test('signature: rejects SOL transfer with wrong amount', async () => {
             credential: signatureCredential(SIGNATURE, { amount: '1000000' }),
             request: {} as any,
         }),
-    ).rejects.toThrow(/Amount mismatch/);
+    ).rejects.toThrow(/No system transfer instruction found/);
 });
 
 // ── SPL token verification ──
@@ -388,7 +388,7 @@ test('signature: rejects SPL transfer with wrong amount', async () => {
             }),
             request: {} as any,
         }),
-    ).rejects.toThrow(/Amount mismatch/);
+    ).rejects.toThrow(/No TransferChecked instruction found/);
 });
 
 test('signature: rejects SPL transfer with wrong destination ATA', async () => {
@@ -826,7 +826,39 @@ test('splits: SOL verification fails when split amount is wrong', async () => {
             credential: signatureCredential(SIGNATURE, { amount: '1000000', splits }),
             request: {} as any,
         }),
-    ).rejects.toThrow(/Amount mismatch.*3pF8/);
+    ).rejects.toThrow(/No system transfer instruction found.*3pF8/);
+});
+
+test('splits: SOL verification matches distinct same-recipient transfers by amount', async () => {
+    const duplicateRecipient = PLATFORM;
+    const splits = [{ recipient: duplicateRecipient, amount: '50000' }];
+    const method = charge({ recipient: duplicateRecipient, network: 'devnet', rpcUrl: 'https://mock-rpc', store, splits });
+
+    globalThis.fetch = async () =>
+        rpcSuccess({
+            meta: { err: null },
+            transaction: {
+                message: {
+                    instructions: [
+                        {
+                            program: 'system',
+                            parsed: { type: 'transfer', info: { destination: duplicateRecipient, lamports: 950000 } },
+                        },
+                        {
+                            program: 'system',
+                            parsed: { type: 'transfer', info: { destination: duplicateRecipient, lamports: 50000 } },
+                        },
+                    ],
+                },
+            },
+        });
+
+    const receipt = await method.verify({
+        credential: signatureCredential(SIGNATURE, { amount: '1000000', recipient: duplicateRecipient, splits }),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
 });
 
 test('splits: rejects splits that consume entire amount', async () => {
@@ -1014,7 +1046,7 @@ test('splits: SPL verification fails when primary amount is wrong', async () => 
             credential: signatureCredential(SIGNATURE, { amount: '1000000', currency: USDC_MINT, decimals: 6, splits }),
             request: {} as any,
         }),
-    ).rejects.toThrow(/Amount mismatch.*950000/);
+    ).rejects.toThrow(/No TransferChecked instruction found.*9xAX/);
 });
 
 test('splits: SPL verification fails when split amount is wrong', async () => {
@@ -1070,7 +1102,65 @@ test('splits: SPL verification fails when split amount is wrong', async () => {
             credential: signatureCredential(SIGNATURE, { amount: '1000000', currency: USDC_MINT, decimals: 6, splits }),
             request: {} as any,
         }),
-    ).rejects.toThrow(/Amount mismatch.*3pF8/);
+    ).rejects.toThrow(/No TransferChecked instruction found.*3pF8/);
+});
+
+test('splits: SPL verification matches distinct same-recipient transfers by amount', async () => {
+    const duplicateRecipient = PLATFORM;
+    const splits = [{ recipient: duplicateRecipient, amount: '50000' }];
+    const method = charge({
+        recipient: duplicateRecipient,
+        currency: USDC_MINT,
+        decimals: 6,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+        splits,
+    });
+
+    const [duplicateAta] = await findAssociatedTokenPda({
+        mint: address(USDC_MINT),
+        owner: address(duplicateRecipient),
+        tokenProgram: address(TOKEN_PROGRAM),
+    });
+
+    globalThis.fetch = async () =>
+        rpcSuccess({
+            meta: { err: null },
+            transaction: {
+                message: {
+                    instructions: [
+                        {
+                            programId: TOKEN_PROGRAM,
+                            parsed: {
+                                type: 'transferChecked',
+                                info: { destination: duplicateAta, mint: USDC_MINT, tokenAmount: { amount: '950000' } },
+                            },
+                        },
+                        {
+                            programId: TOKEN_PROGRAM,
+                            parsed: {
+                                type: 'transferChecked',
+                                info: { destination: duplicateAta, mint: USDC_MINT, tokenAmount: { amount: '50000' } },
+                            },
+                        },
+                    ],
+                },
+            },
+        });
+
+    const receipt = await method.verify({
+        credential: signatureCredential(SIGNATURE, {
+            amount: '1000000',
+            currency: USDC_MINT,
+            recipient: duplicateRecipient,
+            decimals: 6,
+            splits,
+        }),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
 });
 
 test('splits: multiple splits with SPL', async () => {

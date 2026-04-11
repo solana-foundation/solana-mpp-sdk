@@ -381,7 +381,11 @@ async function verifySplTransfer(
 
     const index = transfers.findIndex(ix => {
         const info = ix.parsed!.info as { destination: string; mint: string; tokenAmount: { amount: string } };
-        return info.destination === expectedAta && info.mint === spl;
+        return (
+            info.destination === expectedAta &&
+            info.mint === spl &&
+            info.tokenAmount.amount === expectedAmount
+        );
     });
 
     if (index === -1) {
@@ -400,8 +404,8 @@ async function verifySplTransfer(
 
 function verifySolTransfer(transfers: ParsedInstruction[], recipientAddress: string, expectedAmount: string) {
     const index = transfers.findIndex(ix => {
-        const info = ix.parsed!.info as { destination: string };
-        return info.destination === recipientAddress;
+        const info = ix.parsed!.info as { destination: string; lamports: number | string };
+        return info.destination === recipientAddress && String(info.lamports) === expectedAmount;
     });
 
     if (index === -1) {
