@@ -40,6 +40,7 @@ solana-transaction-status = { version = "3.1", default-features = false }
 # Tracking issue: TBD.
 solana-client = { version = "3.1", default-features = false }            # nonblocking::rpc_client::RpcClient, rpc_config::RpcAccountInfoConfig
 solana-sdk-ids = { version = "3.1", default-features = false }           # ed25519_program, sysvar::instructions
+solana-ed25519-program = { version = "3.0", default-features = false }   # canonical builder for the ed25519 precompile instruction (extracted out of solana-sdk on the 3.x track)
 solana-compute-budget-interface = { version = "3.0", default-features = false }  # ComputeBudgetInstruction builder (highest published 3.x is 3.0.0)
 spl-token = { version = "8", default-features = false }                  # classic SPL Token Program ID (v1: Token-2022 rejected at process_open)
 spl-token-2022 = { version = "8" }                                       # Token-2022 program ID, imported ONLY so the S3-M5 mint-owner check rejects it. Defaults required: v8 fails to compile with default-features = false (confidential_mint_burn references zk-ops-gated fn unconditionally).
@@ -94,12 +95,10 @@ axum = "0.8"
 surfpool-sdk = { git = "https://github.com/solana-foundation/surfpool", rev = "3dcb436" }
 serial_test = "3"
 
-# Dev-only: used by session_l0_precompile.rs and the L1 integration oracles.
-# `solana-sdk` provides `Keypair`, `Transaction`, and
-# `ed25519_instruction::new_ed25519_instruction_with_signature` (the L0
-# oracle's canonical comparator). The 3.x line published to crates.io stops
-# at 3.0.0, so we pin `3.0` rather than the sibling 3.1 track used by the
-# atomic solana-* crates above; this is the highest published 3.x release.
+# Dev-only: `solana-sdk` 3.x provides `Keypair`, `Transaction`, and other
+# umbrella re-exports used by the L1 integration tests. Pinned at 3.0
+# (highest published 3.x on crates.io) rather than the 3.1 atomic-crate
+# track to keep the umbrella release tip aligned.
 solana-sdk = { version = "3.0", default-features = false }
 # `ed25519-dalek` is already declared in [dependencies] above (used by the
 # voucher verification path), so it is not re-declared here.
