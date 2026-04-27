@@ -104,10 +104,12 @@ describe('selectSolanaChargeChallengeFromResponse', () => {
         const response = new Response(null, {
             headers: {
                 'WWW-Authenticate': [
-                    Challenge.serialize(challenge('usdc-mainnet', {
-                        currency: USDC['mainnet-beta'],
-                        network: 'mainnet-beta',
-                    })),
+                    Challenge.serialize(
+                        challenge('usdc-mainnet', {
+                            currency: USDC['mainnet-beta'],
+                            network: 'mainnet-beta',
+                        }),
+                    ),
                     Challenge.serialize(challenge('usdc-devnet')),
                 ].join(', '),
             },

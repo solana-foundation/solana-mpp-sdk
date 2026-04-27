@@ -44,6 +44,7 @@
         "@solana/kit-client-rpc": "^0.8.0",
         "@types/node": "^25.5.0",
         "mppx": "^0.5.5",
+        "surfpool-sdk": "^1.2.0",
         "tsx": "^4.19.0"
     }
 }

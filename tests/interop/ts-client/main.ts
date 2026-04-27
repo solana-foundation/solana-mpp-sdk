@@ -262,9 +262,10 @@ async function main() {
     lastValidBlockHeight = value.lastValidBlockHeight;
   }
 
-  // Build instructions — matching the canonical Rust SDK flow:
+  // Build instructions — matching the SDK flow:
   // 1. Compute budget (always)
-  // 2. ATA creation + transfer (for each recipient)
+  // 2. Primary transfer
+  // 3. Split ATA creation + transfer when the challenge allows it
   const instructions: IInstruction[] = [];
 
   // ── Compute budget ──
@@ -328,13 +329,12 @@ async function main() {
       tokenProgram: tokenProgramAddress,
     });
 
-    // Primary: ATA creation + transfer
+    // Primary recipient ATA creation is intentionally out of scope.
     const [destAta] = await findAssociatedTokenPda({
       owner: address(recipient),
       mint: mintAddress,
       tokenProgram: tokenProgramAddress,
     });
-    instructions.push(createAtaIdempotent(ataPayer, destAta, address(recipient), mintAddress, tokenProgramAddress));
     instructions.push(
       getTransferCheckedInstruction({
         source: sourceAta,

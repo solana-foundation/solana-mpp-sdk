@@ -1,5 +1,5 @@
-import { buildChargeTransaction, charge as charge_ } from './Charge.js';
 import { selectSolanaChargeChallenge } from './ChallengeSelection.js';
+import { buildChargeTransaction, charge as charge_ } from './Charge.js';
 
 /**
  * Creates a Solana `charge` method for usage on the client.

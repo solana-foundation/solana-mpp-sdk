@@ -26,6 +26,7 @@ if (!RECIPIENT) {
 }
 
 const NETWORK = (process.env.NETWORK ?? 'localnet') as string
+const RPC_URL = process.env.RPC_URL ?? 'http://localhost:8899'
 const SECRET_KEY = process.env.MPP_SECRET_KEY ?? crypto.randomBytes(32).toString('hex')
 
 // ── Fee payer signer ──
@@ -43,7 +44,7 @@ if (process.env.FEE_PAYER_KEY) {
 
 // Fund fee payer via surfpool cheatcode (set SOL balance directly)
 try {
-  const res = await fetch('http://localhost:8899', {
+  const res = await fetch(RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -87,7 +88,7 @@ app.use(
 app.get('/api/v1/health', async (_req: Request, res: Response) => {
   let feePayerBalance: number | undefined
   try {
-    const rpc = createSolanaRpc('http://localhost:8899')
+    const rpc = createSolanaRpc(RPC_URL)
     const { value } = await rpc.getBalance(feePayerSigner.address).send()
     feePayerBalance = Number(value) / 1e9
   } catch { /* surfpool may be down */ }

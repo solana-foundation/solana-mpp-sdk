@@ -16,7 +16,8 @@ import { systemProgram } from '@solana-program/system';
 import { Mppx as ServerMppx, solana as serverSolana, Store } from '../../src/server/index.js';
 import { Mppx as ClientMppx, solana as clientSolana } from '../../src/client/index.js';
 
-const RPC_URL = 'http://localhost:8899';
+const RPC_URL = process.env.RPC_URL ?? 'http://localhost:8899';
+const RPC_WS_URL = process.env.RPC_WS_URL ?? 'ws://127.0.0.1:8900';
 
 type GeneratedSigner = Awaited<ReturnType<typeof generateKeyPairSigner>>;
 type TestClient = Awaited<ReturnType<typeof createTestClient>>;
@@ -24,7 +25,9 @@ type TestClient = Awaited<ReturnType<typeof createTestClient>>;
 // ── Helpers ──
 
 async function createTestClient(payer?: GeneratedSigner) {
-    return await createLocalClient({ payer, url: RPC_URL }).use(systemProgram());
+    return await createLocalClient({ payer, rpcSubscriptionsConfig: { url: RPC_WS_URL }, url: RPC_URL }).use(
+        systemProgram(),
+    );
 }
 
 async function getBalance(client: TestClient, pubkey: string): Promise<bigint> {
@@ -68,13 +71,14 @@ let clientSigner: GeneratedSigner;
 let recipientSigner: GeneratedSigner;
 let server: http.Server;
 let serverPort: number;
+let surfpoolRunning = false;
 
 beforeAll(async () => {
-    const running = await isSurfpoolRunning();
-    if (!running) {
-        console.log('Surfpool not running on localhost:8899 — skipping integration tests.');
-        console.log('Start it with: surfpool start --no-tui --offline');
-        process.exit(0);
+    surfpoolRunning = await isSurfpoolRunning();
+    if (!surfpoolRunning) {
+        console.log(`Surfpool not running at ${RPC_URL} — skipping integration tests.`);
+        console.log('Start it with: surfpool start --no-tui --offline, or set RPC_URL.');
+        return;
     }
 
     // Generate fresh keypairs
@@ -141,9 +145,15 @@ afterAll(() => {
     server?.close();
 });
 
+function hasSurfpool(): boolean {
+    return surfpoolRunning;
+}
+
 // ── Tests ──
 
 test('e2e: native SOL charge via pull mode (default)', async () => {
+    if (!hasSurfpool()) return;
+
     const events: string[] = [];
 
     const clientMethod = clientSolana.charge({
@@ -177,6 +187,8 @@ test('e2e: native SOL charge via pull mode (default)', async () => {
 });
 
 test('e2e: native SOL charge via push mode', async () => {
+    if (!hasSurfpool()) return;
+
     const events: string[] = [];
 
     const clientMethod = clientSolana.charge({
@@ -204,6 +216,8 @@ test('e2e: native SOL charge via push mode', async () => {
 });
 
 test('e2e: multiple sequential charges succeed', async () => {
+    if (!hasSurfpool()) return;
+
     const clientMethod = clientSolana.charge({
         signer: clientSigner,
         rpcUrl: RPC_URL,
@@ -221,6 +235,8 @@ test('e2e: multiple sequential charges succeed', async () => {
 });
 
 test('e2e: receipt header is present on success', async () => {
+    if (!hasSurfpool()) return;
+
     const clientMethod = clientSolana.charge({
         signer: clientSigner,
         rpcUrl: RPC_URL,
@@ -239,6 +255,8 @@ test('e2e: receipt header is present on success', async () => {
 // ── Fee payer (server pays tx fees) ──
 
 test('e2e: fee payer mode — server co-signs and pays fees', async () => {
+    if (!hasSurfpool()) return;
+
     // Generate a dedicated fee payer keypair for the server
     const feePayerSigner = await generateKeyPairSigner();
     await client.airdrop(feePayerSigner.address, lamports(10_000_000_000n));
@@ -333,9 +351,12 @@ async function fundUsdc(ownerAddress: string, amount: number) {
 }
 
 test('e2e: USDC charge via pull mode with fee payer', async () => {
+    if (!hasSurfpool()) return;
+
     const feePayerSigner = await generateKeyPairSigner();
     await client.airdrop(feePayerSigner.address, lamports(10_000_000_000n));
     await fundUsdc(clientSigner.address, 100_000_000); // 100 USDC
+    await fundUsdc(recipientSigner.address, 0);
 
     const secretKey = 'test-secret-key-usdc';
 
@@ -398,10 +419,14 @@ test('e2e: USDC charge via pull mode with fee payer', async () => {
 });
 
 test('e2e: USDC charge with splits (platform fee)', async () => {
+    if (!hasSurfpool()) return;
+
     const feePayerSigner = await generateKeyPairSigner();
     const platformSigner = await generateKeyPairSigner();
     await client.airdrop(feePayerSigner.address, lamports(10_000_000_000n));
     await fundUsdc(clientSigner.address, 100_000_000); // 100 USDC
+    await fundUsdc(recipientSigner.address, 0);
+    await fundUsdc(platformSigner.address, 0);
 
     const secretKey = 'test-secret-key-splits';
     const splits = [{ recipient: platformSigner.address, amount: '5000', memo: 'platform fee' }];
@@ -463,6 +488,8 @@ test('e2e: USDC charge with splits (platform fee)', async () => {
 });
 
 test('e2e: native SOL charge with splits', async () => {
+    if (!hasSurfpool()) return;
+
     const platformSigner = await generateKeyPairSigner();
     const referrerSigner = await generateKeyPairSigner();
 

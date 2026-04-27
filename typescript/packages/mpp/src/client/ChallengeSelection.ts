@@ -1,5 +1,5 @@
-import { Challenge } from 'mppx';
 import type { z } from 'mppx';
+import { Challenge } from 'mppx';
 
 import { resolveStablecoinMint } from '../constants.js';
 import { charge as chargeMethod } from '../Methods.js';
@@ -14,7 +14,7 @@ export type SolanaChargeChallenge = Challenge.Challenge<
 /** Options for selecting one Solana charge challenge from a challenge set. */
 export type SelectSolanaChargeChallengeOptions = {
     /** Currency symbol or mint address the client wants to pay with. */
-    currency?: readonly string[] | string | undefined;
+    currency?: string | readonly string[] | undefined;
     /** Solana network identifier, e.g. "mainnet-beta", "devnet", or "localnet". */
     network?: string | undefined;
 };
@@ -68,7 +68,7 @@ export function selectSolanaChargeChallenge(
         return candidates[0];
     }
 
-    const acceptedCurrencies = Array.isArray(options.currency) ? options.currency : [options.currency];
+    const acceptedCurrencies = normalizeCurrencyPreference(options.currency);
     for (const acceptedCurrency of acceptedCurrencies) {
         const candidate = candidates.find(challenge => matchesCurrency(challenge, acceptedCurrency));
         if (candidate) {
@@ -95,16 +95,23 @@ function matchesNetwork(challenge: SolanaChargeChallenge, network: string | unde
     return (challenge.request.methodDetails.network ?? 'mainnet-beta') === network;
 }
 
-function matchesCurrency(challenge: SolanaChargeChallenge, currency: readonly string[] | string | undefined): boolean {
+function matchesCurrency(challenge: SolanaChargeChallenge, currency: string | readonly string[] | undefined): boolean {
     if (!currency) {
         return true;
     }
 
-    const acceptedCurrencies = Array.isArray(currency) ? currency : [currency];
+    const acceptedCurrencies = normalizeCurrencyPreference(currency);
     const challengeNetwork = challenge.request.methodDetails.network;
     return acceptedCurrencies.some(acceptedCurrency =>
         currenciesMatch(challenge.request.currency, acceptedCurrency, challengeNetwork),
     );
+}
+
+function normalizeCurrencyPreference(currency: string | readonly string[] | undefined): readonly string[] {
+    if (!currency) {
+        return [];
+    }
+    return typeof currency === 'string' ? [currency] : currency;
 }
 
 function currenciesMatch(challengeCurrency: string, acceptedCurrency: string, network: string | undefined): boolean {

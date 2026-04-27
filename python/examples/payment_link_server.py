@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -24,7 +25,7 @@ from solana_mpp.store import MemoryStore
 RECIPIENT = "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SECRET = "interop-test-secret-key-long-enough-for-hmac-sha256-operations"
-RPC_URL = "http://localhost:8899"
+RPC_URL = os.environ.get("RPC_URL", "http://localhost:8899")
 
 FORTUNES = [
     "A smooth long journey!",

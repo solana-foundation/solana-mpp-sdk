@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	mpp "github.com/solana-foundation/mpp-sdk/go"
@@ -32,6 +33,7 @@ func main() {
 		Recipient: recipient,
 		SecretKey: "test-secret-key-do-not-use-in-production-1234567890abcdef",
 		Network:   "localnet",
+		RPCURL:    os.Getenv("RPC_URL"),
 		Currency:  mint,
 		Decimals:  6,
 		HTML:      true,

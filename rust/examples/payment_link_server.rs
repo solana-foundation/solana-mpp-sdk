@@ -120,6 +120,8 @@ async fn health() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
+    let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8899".to_string());
+
     // No fee payer — test mode client pays its own fees.
     let mpp = Arc::new(
         Mpp::new(Config {
@@ -128,6 +130,7 @@ async fn main() {
                 "e2e-test-secret-key-long-enough-for-hmac-operations-1234567890".into(),
             ),
             network: "localnet".to_string(),
+            rpc_url: Some(rpc_url),
             currency: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             decimals: 6,
             html: true,

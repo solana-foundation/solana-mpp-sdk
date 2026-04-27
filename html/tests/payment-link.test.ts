@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 // Configurable via env: FORTUNE_PATH defaults to /fortune
 const FORTUNE = process.env.FORTUNE_PATH ?? '/fortune';
+const SERVICE_WORKER_PATTERN = /__mpp_worker|__mppx_worker/;
 
 test('payment link page renders correctly', async ({ page }) => {
   const response = await page.goto(FORTUNE, { waitUntil: 'networkidle' });
@@ -12,13 +13,22 @@ test('payment link page renders correctly', async ({ page }) => {
 });
 
 test('clicking pay triggers the payment flow', async ({ page, context }) => {
-  const swPromise = context.waitForEvent('serviceworker', { timeout: 30_000 });
-
   await page.goto(FORTUNE, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Continue with Solana/i }).click();
 
-  const sw = await swPromise;
-  expect(sw.url()).toMatch(/__mpp_worker|__mppx_worker/);
+  await expect
+    .poll(async () => {
+      const workerUrls = context.serviceWorkers().map(worker => worker.url());
+      const registrationUrl = await page
+        .evaluate(async () => {
+          const registration = await navigator.serviceWorker.getRegistration('/');
+          return registration?.active?.scriptURL ?? registration?.installing?.scriptURL ?? registration?.waiting?.scriptURL ?? null;
+        })
+        .catch(() => null);
+
+      return [...workerUrls, registrationUrl].filter(Boolean).some(url => SERVICE_WORKER_PATTERN.test(url!));
+    }, { timeout: 30_000 })
+    .toBe(true);
 });
 
 test('full e2e: payment completes and returns fortune', async ({ page }) => {

@@ -785,9 +785,9 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
+            expectedAtaPayer: feePayer,
             expectedMint: mint,
             expectedTokenProgram,
-            expectedAtaPayer: feePayer,
             requiredAtaOwners: ataPolicy.requiredAtaOwners,
         });
     } else {
@@ -806,9 +806,9 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
+            expectedAtaPayer: undefined,
             expectedMint: undefined,
             expectedTokenProgram: undefined,
-            expectedAtaPayer: undefined,
             requiredAtaOwners: ataPolicy.requiredAtaOwners,
         });
     }

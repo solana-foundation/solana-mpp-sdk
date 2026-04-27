@@ -60,6 +60,9 @@ importers:
       mppx:
         specifier: ^0.5.5
         version: 0.5.5(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(express@5.2.1)(hono@4.12.8)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.5(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.3.6))
+      surfpool-sdk:
+        specifier: ^1.2.0
+        version: 1.2.0
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
@@ -3054,6 +3057,28 @@ packages:
   supports-color@8.1.1:
     resolution: {integrity: sha512-MpUEN2OodtUzxvKQl72cUF7RQ5EiHsGvSsVG0ia9c5RbWGL2CI4C7EpPS8UTBIplnlzZiNuV56w+FuNxy3ty2Q==}
     engines: {node: '>=10'}
+
+  surfpool-sdk-darwin-arm64@1.2.0:
+    resolution: {integrity: sha512-OrCcXmiHmM6yJiYUc0QYsCXatqp5oBVyCBDlOtIXRwxa7uqZ28Y4Vjae8p7o6BB0ODrdV55rHBK0Tl4ZCZaGyw==}
+    engines: {node: '>=18'}
+    cpu: [arm64]
+    os: [darwin]
+
+  surfpool-sdk-darwin-x64@1.2.0:
+    resolution: {integrity: sha512-AHdd5CNsTqnQKoMAezgs8NvfRChu0wlXejxYttGuDzk3QjdUMri5SQTMKyg8wFZfsuNIf4Gz2JL3JXe5FD78Lw==}
+    engines: {node: '>=18'}
+    cpu: [x64]
+    os: [darwin]
+
+  surfpool-sdk-linux-x64-gnu@1.2.0:
+    resolution: {integrity: sha512-i1NX/2yrIAwGHeNK+NLqqIfASS1eRLZrsm5oovyrOo3KjeZVVTLImgqtEHy+g5BItDCOvO/WwE268C+RLcnYZQ==}
+    engines: {node: '>=18'}
+    cpu: [x64]
+    os: [linux]
+
+  surfpool-sdk@1.2.0:
+    resolution: {integrity: sha512-4izzri+mlUEgxt5r+l/Xfko9oN2cCiKTl5yEYL5ptzDCJd1PG1A9/TMtAezQ4mtBQEyza4fwuTUSq+ukQxtBpw==}
+    engines: {node: '>=18'}
 
   synckit@0.11.12:
     resolution: {integrity: sha512-Bh7QjT8/SuKUIfObSXNHNSK6WHo6J1tHCqJsuaFDP7gP0fkzSfTxI8y85JrppZ0h8l0maIgc2tfuZQ6/t3GtnQ==}
@@ -6661,6 +6686,21 @@ snapshots:
   supports-color@8.1.1:
     dependencies:
       has-flag: 4.0.0
+
+  surfpool-sdk-darwin-arm64@1.2.0:
+    optional: true
+
+  surfpool-sdk-darwin-x64@1.2.0:
+    optional: true
+
+  surfpool-sdk-linux-x64-gnu@1.2.0:
+    optional: true
+
+  surfpool-sdk@1.2.0:
+    optionalDependencies:
+      surfpool-sdk-darwin-arm64: 1.2.0
+      surfpool-sdk-darwin-x64: 1.2.0
+      surfpool-sdk-linux-x64-gnu: 1.2.0
 
   synckit@0.11.12:
     dependencies:

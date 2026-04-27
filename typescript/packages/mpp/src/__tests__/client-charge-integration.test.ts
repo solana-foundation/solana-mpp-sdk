@@ -162,7 +162,7 @@ describe('client charge integration (surfpool)', () => {
         const method = charge({ signer, rpcUrl: surfnet.rpcUrl, broadcast: true });
 
         const challenge = makeChallenge({
-            amount: '100000',
+            amount: '1000000',
             recipient: recipientKey,
         });
 
@@ -185,7 +185,7 @@ describe('client charge integration (surfpool)', () => {
         });
 
         const challenge = makeChallenge({
-            amount: '100000',
+            amount: '1000000',
             recipient: recipientKey,
         });
 
