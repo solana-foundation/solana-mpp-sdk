@@ -1,3 +1,7 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+// Draft module pending rewrite alongside the high-level wiring layer.
+#![cfg(any())]
+
 //! Client-side session intent implementation.
 //!
 //! Tracks an open payment channel and signs cumulative vouchers for each

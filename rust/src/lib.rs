@@ -62,8 +62,9 @@ pub use protocol::core::{
 
 // Intent types
 pub use protocol::intents::{
-    parse_units, ChargeRequest, ClosePayload, OpenPayload, SessionAction, SessionMode,
-    SessionRequest, SessionSplit, SignedVoucher, TopUpPayload, VoucherData, VoucherPayload,
+    parse_units, typed_to_wire, wire_to_typed, BpsSplit, ChargeRequest, ClosePayload,
+    MethodDetails, OpenPayload, SessionAction, SessionRequest, SigType, SignedVoucher, Split,
+    TopUpPayload, VoucherData,
 };
 
 // Store types

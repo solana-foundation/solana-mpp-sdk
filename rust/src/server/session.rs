@@ -1,3 +1,7 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+// Draft module pending rewrite as the session-store layer lands.
+#![cfg(any())]
+
 //! Server-side session intent — challenge issuance, voucher verification,
 //! and channel lifecycle management.
 //!

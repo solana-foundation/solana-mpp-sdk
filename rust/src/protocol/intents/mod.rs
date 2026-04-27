@@ -5,8 +5,8 @@ pub mod session;
 
 pub use charge::ChargeRequest;
 pub use session::{
-    ClosePayload, OpenPayload, SessionAction, SessionMode, SessionRequest, SessionSplit,
-    SignedVoucher, TopUpPayload, VoucherData, VoucherPayload,
+    typed_to_wire, wire_to_typed, BpsSplit, ClosePayload, MethodDetails, OpenPayload,
+    SessionAction, SessionRequest, SigType, SignedVoucher, Split, TopUpPayload, VoucherData,
 };
 
 /// Convert a human-readable amount to base units.
