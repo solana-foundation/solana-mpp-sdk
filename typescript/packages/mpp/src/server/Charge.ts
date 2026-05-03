@@ -1098,11 +1098,11 @@ type ChallengeRequest = {
 /** A parsed instruction from a jsonParsed transaction. */
 type ParsedInstruction = {
     parsed?:
+        | string
         | {
               info: Record<string, unknown>;
               type: string;
-          }
-        | string;
+          };
     program?: string;
     programId?: string;
 };

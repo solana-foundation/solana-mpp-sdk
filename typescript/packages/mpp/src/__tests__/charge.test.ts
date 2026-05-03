@@ -48,6 +48,18 @@ const USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 const SIGNATURE = '5UfDuX6nSqMzMR8W7n6K3b1GKLmaqEisBFCcYPRLjNHrCbVQJF3BVjkE7aQJMQ2Kx';
 const BLOCKHASH = 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N' as Blockhash;
 
+type TestCompiledInstruction = {
+    accountIndices?: readonly unknown[];
+    accounts?: readonly unknown[];
+    data: Uint8Array;
+    programAddressIndex: number;
+};
+
+type TestCompiledMessage = {
+    instructions: readonly TestCompiledInstruction[];
+    staticAccounts: readonly { toString(): string }[];
+};
+
 /** Build a push mode credential (type="signature"). */
 function signatureCredential(
     sig: string,
@@ -597,7 +609,9 @@ test('client: includes memo instructions for memo-bearing SOL splits', async () 
 
     const txBytes = getBase64Codec().encode(transaction);
     const decoded = getTransactionDecoder().decode(txBytes);
-    const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
+    const message = getCompiledTransactionMessageDecoder().decode(
+        decoded.messageBytes,
+    ) as unknown as TestCompiledMessage;
     const memoInstruction = message.instructions.find(
         ix => message.staticAccounts[ix.programAddressIndex].toString() === MEMO_PROGRAM,
     );
@@ -626,21 +640,15 @@ test('client: includes memo instructions for memo-bearing SPL splits', async () 
 
     const txBytes = getBase64Codec().encode(transaction);
     const decoded = getTransactionDecoder().decode(txBytes);
-    const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
+    const message = getCompiledTransactionMessageDecoder().decode(
+        decoded.messageBytes,
+    ) as unknown as TestCompiledMessage;
     const memoInstruction = message.instructions.find(
         ix => message.staticAccounts[ix.programAddressIndex].toString() === MEMO_PROGRAM,
     );
 
     expect(memoInstruction).toBeDefined();
-    const memoAccounts =
-        (
-            memoInstruction as unknown as {
-                accountIndices?: readonly unknown[];
-                accounts?: readonly unknown[];
-            }
-        ).accountIndices ??
-        (memoInstruction as unknown as { accounts?: readonly unknown[] }).accounts ??
-        [];
+    const memoAccounts = memoInstruction?.accountIndices ?? memoInstruction?.accounts ?? [];
     expect(memoAccounts).toHaveLength(0);
     expect(new TextDecoder().decode(memoInstruction!.data)).toBe('platform fee');
 });
