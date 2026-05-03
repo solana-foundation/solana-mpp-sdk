@@ -391,7 +391,6 @@ function getRpcUrl(n: string) {
 
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
-const CASH_MAINNET_MINT = 'CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH';
 const STABLECOIN_MINTS: Record<string, Record<string, string>> = {
   USDC: {
     devnet: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
@@ -400,14 +399,19 @@ const STABLECOIN_MINTS: Record<string, Record<string, string>> = {
   USDT: {
     'mainnet-beta': 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
   },
+  USDG: {
+    devnet: '4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7',
+    'mainnet-beta': '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
+  },
   PYUSD: {
     devnet: 'CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM',
     'mainnet-beta': '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo',
   },
   CASH: {
-    'mainnet-beta': CASH_MAINNET_MINT,
+    'mainnet-beta': 'CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH',
   },
 };
+const TOKEN_2022_STABLECOIN_SYMBOLS = new Set(['PYUSD', 'USDG', 'CASH']);
 
 function resolveMint(currency: string, network: string): string | null {
   if (currency.toLowerCase() === 'sol') return null;
@@ -416,8 +420,19 @@ function resolveMint(currency: string, network: string): string | null {
   return mints?.[network] ?? mints?.['mainnet-beta'] ?? currency;
 }
 
+function stablecoinSymbol(currency: string, network: string): string | undefined {
+  const normalized = currency.toUpperCase();
+  if (STABLECOIN_MINTS[normalized]) return normalized;
+  const resolved = resolveMint(currency, network);
+  if (!resolved) return undefined;
+  for (const [symbol, mints] of Object.entries(STABLECOIN_MINTS)) {
+    if (Object.values(mints).includes(resolved)) return symbol;
+  }
+}
+
 function defaultTokenProgram(currency: string, network: string): string {
-  return resolveMint(currency, network) === CASH_MAINNET_MINT ? TOKEN_2022_PROGRAM : TOKEN_PROGRAM;
+  const symbol = stablecoinSymbol(currency, network);
+  return symbol && TOKEN_2022_STABLECOIN_SYMBOLS.has(symbol) ? TOKEN_2022_PROGRAM : TOKEN_PROGRAM;
 }
 
 async function findATA(owner: string, mint: string, tokenProg: string) {

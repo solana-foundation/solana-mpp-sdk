@@ -27,7 +27,15 @@ import {
 } from '@solana/kit';
 import { buildChargeTransaction } from '../client/Charge.js';
 import { charge } from '../server/Charge.js';
-import { ASSOCIATED_TOKEN_PROGRAM, CASH, SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from '../constants.js';
+import {
+    ASSOCIATED_TOKEN_PROGRAM,
+    CASH,
+    PYUSD,
+    SYSTEM_PROGRAM,
+    TOKEN_2022_PROGRAM,
+    TOKEN_PROGRAM,
+    USDG,
+} from '../constants.js';
 
 // ── Fixtures ──
 
@@ -1456,28 +1464,33 @@ test('request() preserves unmarked splits in fee payer mode', async () => {
     expect(request.methodDetails.splits).toEqual(splits);
 });
 
-test('request() defaults Phantom CASH to Token-2022', async () => {
+test('request() defaults Token-2022 stablecoins to Token-2022', async () => {
     globalThis.fetch = async () =>
         rpcSuccess({
             value: { blockhash: 'MockBlockhash1111111111111111111111111111111', lastValidBlockHeight: 100 },
         });
 
-    const method = charge({
-        recipient: RECIPIENT,
-        currency: 'CASH',
-        decimals: 6,
-        network: 'mainnet-beta',
-        store,
-    });
+    for (const currency of ['CASH', 'PYUSD', 'USDG']) {
+        const method = charge({
+            recipient: RECIPIENT,
+            currency,
+            decimals: 6,
+            network: 'mainnet-beta',
+            store,
+        });
 
-    const request = await method.request!({
-        credential: null,
-        request: { amount: '1000000', currency: 'CASH', recipient: '', methodDetails: {} },
-    });
+        const request = await method.request!({
+            credential: null,
+            request: { amount: '1000000', currency, recipient: '', methodDetails: {} },
+        });
 
-    expect(request.currency).toBe('CASH');
-    expect(request.methodDetails.tokenProgram).toBe(TOKEN_2022_PROGRAM);
+        expect(request.currency).toBe(currency);
+        expect(request.methodDetails.tokenProgram).toBe(TOKEN_2022_PROGRAM);
+    }
+
     expect(CASH['mainnet-beta']).toBe('CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH');
+    expect(PYUSD['mainnet-beta']).toBe('2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo');
+    expect(USDG['mainnet-beta']).toBe('2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH');
 });
 
 test('splits: SOL verification passes with valid primary + split transfers', async () => {

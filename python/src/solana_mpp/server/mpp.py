@@ -17,7 +17,15 @@ from solana_mpp._errors import (
 )
 from solana_mpp._types import PaymentChallenge, PaymentCredential, Receipt
 from solana_mpp.protocol.intents import ChargeRequest, parse_units
-from solana_mpp.protocol.solana import CredentialPayload, MethodDetails, default_rpc_url, is_native_sol, resolve_mint
+from solana_mpp.protocol.solana import (
+    CredentialPayload,
+    MethodDetails,
+    default_rpc_url,
+    default_token_program_for_currency,
+    is_native_sol,
+    resolve_mint,
+    stablecoin_symbol,
+)
 from solana_mpp.server.network_check import check_network_blockhash
 from solana_mpp.store import MemoryStore, Store
 
@@ -73,7 +81,7 @@ def _verify_parsed_spl_transfers(
     details: MethodDetails,
 ) -> None:
     expected = _build_expected_transfers(request, details)
-    program_id = details.token_program or "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    program_id = details.token_program or default_token_program_for_currency(request.currency, details.network)
     mint = resolve_mint(request.currency, details.network)
     transfers = [
         instruction
@@ -265,6 +273,8 @@ class Mpp:
         details: dict[str, Any] = {"network": self._network}
         if not is_native_sol(self._currency):
             details["decimals"] = self._decimals
+            if stablecoin_symbol(self._currency):
+                details["tokenProgram"] = default_token_program_for_currency(self._currency, self._network)
         if options.fee_payer or self._fee_payer_signer is not None:
             details["feePayer"] = True
             if self._fee_payer_signer is not None:

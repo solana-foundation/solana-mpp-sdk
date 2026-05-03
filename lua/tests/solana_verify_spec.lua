@@ -196,6 +196,55 @@ t.test('signature verifier resolves USDC alias for localnet', function()
   t.assert_equal(result.reference, 'sig-123')
 end)
 
+t.test('signature verifier defaults USDG alias to Token-2022', function()
+  local context = signature_context({
+    request = {
+      amount = '2500',
+      currency = 'USDG',
+      recipient = 'recipient-1',
+      methodDetails = {
+        network = 'mainnet-beta',
+      },
+    },
+    method_details = {
+      network = 'mainnet-beta',
+    },
+  })
+
+  local result = verify.verify_signature(context, {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              {
+                programId = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+                parsed = {
+                  type = 'transferChecked',
+                  info = {
+                    destination = 'token-account-1',
+                    mint = '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
+                    tokenAmount = { amount = '2500' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }
+    end,
+    fetch_token_account = function(address)
+      t.assert_equal(address, 'token-account-1')
+      return {
+        owner = 'recipient-1',
+        mint = '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+end)
+
 t.test('signature verifier supports split transfers', function()
   local context = signature_context({
     request = {

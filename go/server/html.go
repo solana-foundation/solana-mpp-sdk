@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	mpp "github.com/solana-foundation/mpp-sdk/go"
+	"github.com/solana-foundation/mpp-sdk/go/protocol"
 	"github.com/solana-foundation/mpp-sdk/go/protocol/intents"
 )
 
@@ -113,11 +114,7 @@ func formatAmountDisplay(amountRaw, currency string, decimals uint8) string {
 	}
 
 	switch {
-	case currency == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-		currency == "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-		currency == "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-		strings.EqualFold(currency, "USDC"),
-		strings.EqualFold(currency, "USDT"):
+	case protocol.StablecoinSymbol(currency) != "":
 		return "$" + displayAmount
 	case strings.EqualFold(currency, "sol"):
 		return displayAmount + " SOL"

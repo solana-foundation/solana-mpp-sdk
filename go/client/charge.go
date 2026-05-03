@@ -99,7 +99,7 @@ func BuildChargeTransaction(
 		if methodDetails.Decimals != nil {
 			decimals = *methodDetails.Decimals
 		}
-		sourceATA, err := solanautil.FindAssociatedTokenAddress(signer.PublicKey(), mint)
+		sourceATA, err := solanautil.FindAssociatedTokenAddressWithProgram(signer.PublicKey(), mint, tokenProgram)
 		if err != nil {
 			return protocol.CredentialPayload{}, err
 		}
@@ -111,7 +111,7 @@ func BuildChargeTransaction(
 			}
 		}
 		addTransfer := func(owner solana.PublicKey, amount uint64) error {
-			destATA, err := solanautil.FindAssociatedTokenAddress(owner, mint)
+			destATA, err := solanautil.FindAssociatedTokenAddressWithProgram(owner, mint, tokenProgram)
 			if err != nil {
 				return err
 			}

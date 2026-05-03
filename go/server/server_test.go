@@ -696,6 +696,48 @@ func TestNewWithDefaultValues(t *testing.T) {
 	}
 }
 
+func TestChargeKnownStablecoinTokenPrograms(t *testing.T) {
+	for _, tt := range []struct {
+		currency string
+		want     string
+	}{
+		{currency: "USDC", want: protocol.TokenProgram},
+		{currency: "USDT", want: protocol.TokenProgram},
+		{currency: "PYUSD", want: protocol.Token2022Program},
+		{currency: "USDG", want: protocol.Token2022Program},
+		{currency: "CASH", want: protocol.Token2022Program},
+	} {
+		rpcClient := testutil.NewFakeRPC()
+		handler, err := New(Config{
+			Recipient: testutil.NewPrivateKey().PublicKey().String(),
+			Currency:  tt.currency,
+			Decimals:  6,
+			Network:   "mainnet-beta",
+			SecretKey: "test-secret",
+			RPC:       rpcClient,
+			Store:     mpp.NewMemoryStore(),
+		})
+		if err != nil {
+			t.Fatalf("new mpp failed: %v", err)
+		}
+		challenge, err := handler.Charge(context.Background(), "1.000000")
+		if err != nil {
+			t.Fatalf("charge failed: %v", err)
+		}
+		var req map[string]any
+		if err := challenge.Request.Decode(&req); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+		md, ok := req["methodDetails"].(map[string]any)
+		if !ok {
+			t.Fatal("expected methodDetails in request")
+		}
+		if md["tokenProgram"] != tt.want {
+			t.Fatalf("expected %s tokenProgram %s, got %v", tt.currency, tt.want, md["tokenProgram"])
+		}
+	}
+}
+
 func TestVerifyCredentialTokenTransactionSuccess(t *testing.T) {
 	rpcClient := testutil.NewFakeRPC()
 	recipient := testutil.NewPrivateKey()

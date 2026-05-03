@@ -108,7 +108,7 @@ end
 
 function verify_spl_transfers(instructions, request, method_details, hooks)
   local expected = build_expected_transfers(request)
-  local program_id = method_details.tokenProgram or TOKEN_PROGRAM
+  local program_id = method_details.tokenProgram or protocol.default_token_program_for_currency(request.currency, method_details.network)
   local mint = protocol.resolve_mint(request.currency, method_details.network)
   if program_id ~= TOKEN_PROGRAM and program_id ~= TOKEN_2022_PROGRAM then
     error('unsupported token program: ' .. tostring(program_id))

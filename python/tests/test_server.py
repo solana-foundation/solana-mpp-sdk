@@ -10,7 +10,7 @@ from solana_mpp._types import ChallengeEcho, PaymentCredential
 from solders.pubkey import Pubkey
 
 from solana_mpp.protocol.intents import ChargeRequest
-from solana_mpp.protocol.solana import MethodDetails, Split
+from solana_mpp.protocol.solana import MethodDetails, Split, TOKEN_2022_PROGRAM
 from solana_mpp.server.mpp import (
     ChargeOptions,
     Config,
@@ -157,6 +157,31 @@ class TestCharge:
         request = challenge.decode_request()
         md = request["methodDetails"]
         assert "splits" not in md
+
+    @pytest.mark.parametrize(
+        ("currency", "expected_program"),
+        [
+            ("USDC", TOKEN_PROGRAM),
+            ("USDT", TOKEN_PROGRAM),
+            ("PYUSD", TOKEN_2022_PROGRAM),
+            ("USDG", TOKEN_2022_PROGRAM),
+            ("CASH", TOKEN_2022_PROGRAM),
+        ],
+    )
+    def test_charge_includes_known_stablecoin_token_program(self, currency: str, expected_program: str):
+        handler = Mpp(
+            Config(
+                recipient=TEST_RECIPIENT,
+                currency=currency,
+                decimals=6,
+                network="mainnet-beta",
+                secret_key=TEST_SECRET,
+                rpc=FakeRPC(),
+            )
+        )
+        challenge = handler.charge("1.00")
+        request = challenge.decode_request()
+        assert request["methodDetails"]["tokenProgram"] == expected_program
 
 
 class TestVerifyCredential:

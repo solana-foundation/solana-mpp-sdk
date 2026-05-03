@@ -11,6 +11,7 @@ import {
     TOKEN_2022_PROGRAM,
     TOKEN_PROGRAM,
     USDC,
+    USDG,
     USDT,
     defaultTokenProgramForCurrency,
     resolveStablecoinMint,
@@ -54,6 +55,11 @@ describe('stablecoin mint addresses', () => {
         expect(USDT['mainnet-beta']).toBe('Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB');
     });
 
+    test('has USDG mints', () => {
+        expect(USDG.devnet).toBe('4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7');
+        expect(USDG['mainnet-beta']).toBe('2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH');
+    });
+
     test('has PYUSD mints', () => {
         expect(PYUSD.devnet).toBe('CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM');
         expect(PYUSD['mainnet-beta']).toBe('2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo');
@@ -66,6 +72,7 @@ describe('stablecoin mint addresses', () => {
     test('resolves stablecoin symbols by network', () => {
         expect(resolveStablecoinMint('USDC', 'devnet')).toBe(USDC.devnet);
         expect(resolveStablecoinMint('USDT', 'mainnet-beta')).toBe(USDT['mainnet-beta']);
+        expect(resolveStablecoinMint('USDG', 'devnet')).toBe(USDG.devnet);
         expect(resolveStablecoinMint('PYUSD', 'devnet')).toBe(PYUSD.devnet);
         expect(resolveStablecoinMint('CASH', 'mainnet-beta')).toBe(CASH['mainnet-beta']);
         expect(resolveStablecoinMint('SOL')).toBeUndefined();
@@ -76,15 +83,21 @@ describe('stablecoin mint addresses', () => {
 
     test('detects stablecoin display symbols', () => {
         expect(stablecoinSymbolForCurrency(PYUSD['mainnet-beta'])).toBe('PYUSD');
+        expect(stablecoinSymbolForCurrency(USDG['mainnet-beta'])).toBe('USDG');
         expect(stablecoinSymbolForCurrency(CASH['mainnet-beta'])).toBe('CASH');
         expect(stablecoinSymbolForCurrency('CASH')).toBe('CASH');
         expect(stablecoinSymbolForCurrency('CustomMint111111111111111111111111111111')).toBeUndefined();
     });
 
-    test('defaults Phantom CASH to Token-2022', () => {
+    test('defaults stablecoins to the correct token program', () => {
         expect(defaultTokenProgramForCurrency('CASH')).toBe(TOKEN_2022_PROGRAM);
         expect(defaultTokenProgramForCurrency(CASH['mainnet-beta'])).toBe(TOKEN_2022_PROGRAM);
+        expect(defaultTokenProgramForCurrency('PYUSD', 'devnet')).toBe(TOKEN_2022_PROGRAM);
+        expect(defaultTokenProgramForCurrency(PYUSD['mainnet-beta'])).toBe(TOKEN_2022_PROGRAM);
+        expect(defaultTokenProgramForCurrency('USDG', 'devnet')).toBe(TOKEN_2022_PROGRAM);
+        expect(defaultTokenProgramForCurrency(USDG['mainnet-beta'])).toBe(TOKEN_2022_PROGRAM);
         expect(defaultTokenProgramForCurrency('USDC')).toBe(TOKEN_PROGRAM);
+        expect(defaultTokenProgramForCurrency('USDT')).toBe(TOKEN_PROGRAM);
     });
 });
 

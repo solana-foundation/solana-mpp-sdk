@@ -10,9 +10,11 @@ from solana_mpp.protocol.solana import (
     CredentialPayload,
     MethodDetails,
     Split,
+    default_token_program_for_currency,
     default_rpc_url,
     is_native_sol,
     resolve_mint,
+    stablecoin_symbol,
 )
 
 
@@ -47,12 +49,38 @@ class TestResolveMint:
         mint = resolve_mint("USDC", "devnet")
         assert mint.startswith("4zMMC9")
 
+    def test_usdt_mainnet(self):
+        mint = resolve_mint("USDT", "mainnet-beta")
+        assert mint.startswith("Es9vMF")
+
+    def test_usdg_devnet(self):
+        mint = resolve_mint("USDG", "devnet")
+        assert mint.startswith("4F6PM9")
+
     def test_pyusd_mainnet(self):
         mint = resolve_mint("PYUSD", "mainnet-beta")
         assert mint.startswith("2b1kV6")
 
+    def test_cash_mainnet(self):
+        mint = resolve_mint("CASH", "mainnet-beta")
+        assert mint.startswith("CASHx9")
+
     def test_unknown_returns_raw(self):
         assert resolve_mint("SomeCustomMint123", "mainnet-beta") == "SomeCustomMint123"
+
+
+class TestStablecoinPrograms:
+    def test_symbol_detection(self):
+        assert stablecoin_symbol("USDG") == "USDG"
+        assert stablecoin_symbol("2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH") == "USDG"
+        assert stablecoin_symbol("SomeCustomMint123") is None
+
+    def test_token_program_defaults(self):
+        assert default_token_program_for_currency("USDC", "mainnet-beta") == TOKEN_PROGRAM
+        assert default_token_program_for_currency("USDT", "mainnet-beta") == TOKEN_PROGRAM
+        assert default_token_program_for_currency("PYUSD", "devnet") == TOKEN_2022_PROGRAM
+        assert default_token_program_for_currency("USDG", "devnet") == TOKEN_2022_PROGRAM
+        assert default_token_program_for_currency("CASH", "mainnet-beta") == TOKEN_2022_PROGRAM
 
 
 class TestIsNativeSol:

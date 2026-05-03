@@ -134,6 +134,9 @@ func (m *Mpp) ChargeWithOptions(ctx context.Context, amount string, options Char
 	}
 	if !isNativeSOL(m.currency) {
 		details.Decimals = &m.decimals
+		if protocol.StablecoinSymbol(m.currency) != "" {
+			details.TokenProgram = protocol.DefaultTokenProgramForCurrency(m.currency, m.network)
+		}
 	}
 	if options.FeePayer || m.feePayerSigner != nil {
 		enabled := true
@@ -373,7 +376,11 @@ func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, curr
 	resolvedMint := protocol.ResolveMint(currency, details.Network)
 	mint := solana.MustPublicKeyFromBase58(resolvedMint)
 	expectedProgram := solana.TokenProgramID
-	if details.TokenProgram == protocol.Token2022Program {
+	tokenProgram := details.TokenProgram
+	if tokenProgram == "" && protocol.StablecoinSymbol(currency) != "" {
+		tokenProgram = protocol.DefaultTokenProgramForCurrency(currency, details.Network)
+	}
+	if tokenProgram == protocol.Token2022Program {
 		expectedProgram = solana.MustPublicKeyFromBase58(protocol.Token2022Program)
 	}
 	type tokenExpectation struct {

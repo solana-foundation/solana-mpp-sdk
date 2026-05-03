@@ -17,6 +17,9 @@ pub mod mints {
     pub const USDC_DEVNET: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
     pub const USDC_TESTNET: &str = USDC_DEVNET;
     pub const USDT_MAINNET: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+    pub const USDG_MAINNET: &str = "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH";
+    pub const USDG_DEVNET: &str = "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7";
+    pub const USDG_TESTNET: &str = USDG_DEVNET;
     pub const PYUSD_MAINNET: &str = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo";
     pub const PYUSD_DEVNET: &str = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
     pub const PYUSD_TESTNET: &str = PYUSD_DEVNET;
@@ -44,6 +47,11 @@ pub fn resolve_stablecoin_mint<'a>(currency: &'a str, network: Option<&str>) -> 
             _ => mints::USDC_MAINNET,
         }),
         "USDT" => Some(mints::USDT_MAINNET),
+        "USDG" => Some(match network {
+            Some("devnet") => mints::USDG_DEVNET,
+            Some("testnet") => mints::USDG_TESTNET,
+            _ => mints::USDG_MAINNET,
+        }),
         "PYUSD" => Some(match network {
             Some("devnet") => mints::PYUSD_DEVNET,
             Some("testnet") => mints::PYUSD_TESTNET,
@@ -54,10 +62,21 @@ pub fn resolve_stablecoin_mint<'a>(currency: &'a str, network: Option<&str>) -> 
     }
 }
 
+fn stablecoin_uses_token_2022(mint: &str) -> bool {
+    matches!(
+        mint,
+        mints::PYUSD_MAINNET
+            | mints::PYUSD_DEVNET
+            | mints::USDG_MAINNET
+            | mints::USDG_DEVNET
+            | mints::CASH_MAINNET
+    )
+}
+
 /// Default token program for a currency or mint.
 pub fn default_token_program_for_currency(currency: &str, network: Option<&str>) -> &'static str {
     match resolve_stablecoin_mint(currency, network) {
-        Some(mint) if mint == mints::CASH_MAINNET => programs::TOKEN_2022_PROGRAM,
+        Some(mint) if stablecoin_uses_token_2022(mint) => programs::TOKEN_2022_PROGRAM,
         _ => programs::TOKEN_PROGRAM,
     }
 }
@@ -137,6 +156,8 @@ mod tests {
         assert!(Pubkey::from_str(mints::USDC_MAINNET).is_ok());
         assert!(Pubkey::from_str(mints::USDC_DEVNET).is_ok());
         assert!(Pubkey::from_str(mints::USDT_MAINNET).is_ok());
+        assert!(Pubkey::from_str(mints::USDG_MAINNET).is_ok());
+        assert!(Pubkey::from_str(mints::USDG_DEVNET).is_ok());
         assert!(Pubkey::from_str(mints::PYUSD_MAINNET).is_ok());
         assert!(Pubkey::from_str(mints::PYUSD_DEVNET).is_ok());
         assert!(Pubkey::from_str(mints::CASH_MAINNET).is_ok());
@@ -158,6 +179,14 @@ mod tests {
             Some(mints::USDT_MAINNET)
         );
         assert_eq!(
+            resolve_stablecoin_mint("USDG", None),
+            Some(mints::USDG_MAINNET)
+        );
+        assert_eq!(
+            resolve_stablecoin_mint("USDG", Some("devnet")),
+            Some(mints::USDG_DEVNET)
+        );
+        assert_eq!(
             resolve_stablecoin_mint("PYUSD", Some("devnet")),
             Some(mints::PYUSD_DEVNET)
         );
@@ -169,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn cash_defaults_to_token_2022() {
+    fn stablecoins_default_to_correct_token_program() {
         assert_eq!(
             default_token_program_for_currency("CASH", None),
             programs::TOKEN_2022_PROGRAM
@@ -179,7 +208,27 @@ mod tests {
             programs::TOKEN_2022_PROGRAM
         );
         assert_eq!(
+            default_token_program_for_currency("PYUSD", Some("devnet")),
+            programs::TOKEN_2022_PROGRAM
+        );
+        assert_eq!(
+            default_token_program_for_currency(mints::PYUSD_MAINNET, None),
+            programs::TOKEN_2022_PROGRAM
+        );
+        assert_eq!(
+            default_token_program_for_currency("USDG", Some("devnet")),
+            programs::TOKEN_2022_PROGRAM
+        );
+        assert_eq!(
+            default_token_program_for_currency(mints::USDG_MAINNET, None),
+            programs::TOKEN_2022_PROGRAM
+        );
+        assert_eq!(
             default_token_program_for_currency("USDC", None),
+            programs::TOKEN_PROGRAM
+        );
+        assert_eq!(
+            default_token_program_for_currency("USDT", None),
             programs::TOKEN_PROGRAM
         );
     }

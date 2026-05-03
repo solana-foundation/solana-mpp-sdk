@@ -71,6 +71,8 @@ function Server:charge_with_options(amount, options)
     method_details.decimals = self.decimals
     if options.token_program then
       method_details.tokenProgram = options.token_program
+    elseif protocol.stablecoin_symbol(self.currency) then
+      method_details.tokenProgram = protocol.default_token_program_for_currency(self.currency, self.network)
     end
   end
   if options.fee_payer or self.fee_payer then
