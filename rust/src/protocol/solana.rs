@@ -8,6 +8,7 @@ pub mod programs {
     pub const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
     pub const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
     pub const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
+    pub const MEMO_PROGRAM: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
     pub const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 }
 
@@ -127,6 +128,7 @@ mod tests {
         assert!(Pubkey::from_str(programs::TOKEN_2022_PROGRAM).is_ok());
         assert!(Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).is_ok());
         assert!(Pubkey::from_str(programs::COMPUTE_BUDGET_PROGRAM).is_ok());
+        assert!(Pubkey::from_str(programs::MEMO_PROGRAM).is_ok());
         assert!(Pubkey::from_str(programs::SYSTEM_PROGRAM).is_ok());
     }
 
@@ -137,6 +139,7 @@ mod tests {
             programs::TOKEN_2022_PROGRAM,
             programs::ASSOCIATED_TOKEN_PROGRAM,
             programs::COMPUTE_BUDGET_PROGRAM,
+            programs::MEMO_PROGRAM,
             programs::SYSTEM_PROGRAM,
         ];
         for (i, a) in all.iter().enumerate() {

@@ -14,6 +14,7 @@ import {
     COMPUTE_BUDGET_PROGRAM,
     DEFAULT_RPC_URLS,
     defaultTokenProgramForCurrency,
+    MEMO_PROGRAM,
     resolveStablecoinMint,
     stablecoinSymbolForCurrency,
     SYSTEM_PROGRAM,
@@ -282,6 +283,7 @@ async function verifyBase64TransactionPreBroadcast(clientTxBase64: string, chall
                 matchedInstructionIndexes,
             );
         }
+        verifyMemoInstructionsPreBroadcast(message, splits, matchedInstructionIndexes);
         await validateInstructionAllowlist(message, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
             expectedMint: undefined,
@@ -325,6 +327,7 @@ async function verifyBase64TransactionPreBroadcast(clientTxBase64: string, chall
             matchedInstructionIndexes,
         );
     }
+    verifyMemoInstructionsPreBroadcast(message, splits, matchedInstructionIndexes);
     await validateInstructionAllowlist(message, matchedInstructionIndexes, {
         allowedAtaOwners: ataPolicy.allowedAtaOwners,
         expectedMint,
@@ -478,6 +481,11 @@ async function validateInstructionAllowlist(
         if (program === COMPUTE_BUDGET_PROGRAM) {
             validateComputeBudgetInstruction(ix);
             continue;
+        }
+
+        if (program === MEMO_PROGRAM) {
+            if (matchedPaymentInstructionIndexes.has(index)) continue;
+            throw new Error('Unexpected Memo Program instruction in payment transaction');
         }
 
         if (program === SYSTEM_PROGRAM) {
@@ -782,6 +790,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
                 matchedInstructionIndexes,
             );
         }
+        verifyMemoInstructions(instructions, splits, matchedInstructionIndexes);
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
@@ -803,6 +812,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
         for (const split of splits) {
             verifySolTransfer(instructions, split.recipient, split.amount, matchedInstructionIndexes);
         }
+        verifyMemoInstructions(instructions, splits, matchedInstructionIndexes);
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
@@ -830,7 +840,7 @@ async function verifySplTransfer(
 
     for (const [index, ix] of instructions.entries()) {
         if (matchedInstructionIndexes.has(index)) continue;
-        if (ix.parsed?.type !== 'transferChecked') continue;
+        if (typeof ix.parsed !== 'object' || ix.parsed?.type !== 'transferChecked') continue;
         if (ix.programId !== tokenProgram) continue;
         const info = ix.parsed.info as { destination?: string; mint?: string; tokenAmount?: { amount?: string } };
         if (info.destination === expectedAta && info.mint === spl && info.tokenAmount?.amount === expectedAmount) {
@@ -850,7 +860,7 @@ function verifySolTransfer(
 ) {
     for (const [index, ix] of instructions.entries()) {
         if (matchedInstructionIndexes.has(index)) continue;
-        if (ix.parsed?.type !== 'transfer' || ix.program !== 'system') continue;
+        if (typeof ix.parsed !== 'object' || ix.parsed?.type !== 'transfer' || ix.program !== 'system') continue;
         const info = ix.parsed.info as { destination?: string; lamports?: number | string };
         if (info.destination === recipientAddress && String(info.lamports) === expectedAmount) {
             matchedInstructionIndexes.add(index);
@@ -859,6 +869,75 @@ function verifySolTransfer(
     }
 
     throw new Error(`No system transfer instruction found for recipient ${recipientAddress}`);
+}
+
+function verifyMemoInstructionsPreBroadcast(
+    message: CompiledMessage,
+    splits: Array<{ memo?: string }>,
+    matchedInstructionIndexes: Set<number>,
+) {
+    for (const split of splits) {
+        if (!split.memo) continue;
+        const expectedData = new TextEncoder().encode(split.memo);
+        if (expectedData.byteLength > 566) {
+            throw new Error('memo cannot exceed 566 bytes');
+        }
+
+        let found = false;
+        for (const [index, ix] of message.instructions.entries()) {
+            if (matchedInstructionIndexes.has(index)) continue;
+            if (programAddress(message, ix) !== MEMO_PROGRAM) continue;
+            if (bytesEqual(ix.data, expectedData)) {
+                matchedInstructionIndexes.add(index);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw new Error(`No memo instruction found for split memo "${split.memo}"`);
+        }
+    }
+}
+
+function verifyMemoInstructions(
+    instructions: ParsedInstruction[],
+    splits: Array<{ memo?: string }>,
+    matchedInstructionIndexes: Set<number>,
+) {
+    for (const split of splits) {
+        if (!split.memo) continue;
+        if (new TextEncoder().encode(split.memo).byteLength > 566) {
+            throw new Error('memo cannot exceed 566 bytes');
+        }
+
+        let found = false;
+        for (const [index, ix] of instructions.entries()) {
+            if (matchedInstructionIndexes.has(index)) continue;
+            if (parsedProgramId(ix) !== MEMO_PROGRAM) continue;
+            if (parsedMemoText(ix) === split.memo) {
+                matchedInstructionIndexes.add(index);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw new Error(`No memo instruction found for split memo "${split.memo}"`);
+        }
+    }
+}
+
+function parsedMemoText(ix: ParsedInstruction): string | undefined {
+    if (typeof ix.parsed === 'string') return ix.parsed;
+    if (typeof ix.parsed?.info?.memo === 'string') return ix.parsed.info.memo;
+    if (typeof ix.parsed?.info?.data === 'string') return ix.parsed.info.data;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
 }
 
 async function validateParsedInstructionAllowlist(
@@ -879,6 +958,11 @@ async function validateParsedInstructionAllowlist(
 
         if (programId === COMPUTE_BUDGET_PROGRAM) {
             continue;
+        }
+
+        if (programId === MEMO_PROGRAM) {
+            if (matchedPaymentInstructionIndexes.has(index)) continue;
+            throw new Error('Unexpected Memo Program instruction in payment transaction');
         }
 
         if (programId === SYSTEM_PROGRAM) {
@@ -911,6 +995,7 @@ function parsedProgramId(ix: ParsedInstruction): string | undefined {
     if (ix.programId) return ix.programId;
     if (ix.program === 'system') return SYSTEM_PROGRAM;
     if (ix.program === 'compute-budget') return COMPUTE_BUDGET_PROGRAM;
+    if (ix.program === 'spl-memo') return MEMO_PROGRAM;
     if (ix.program === 'spl-associated-token-account') return ASSOCIATED_TOKEN_PROGRAM;
     return undefined;
 }
@@ -927,7 +1012,7 @@ async function validateParsedAtaCreationInstruction(
     if (!options.expectedMint) {
         throw new Error('ATA creation is not allowed for native SOL payments');
     }
-    if (ix.parsed?.type !== 'createIdempotent') {
+    if (typeof ix.parsed !== 'object' || ix.parsed?.type !== 'createIdempotent') {
         throw new Error('Only idempotent ATA creation is allowed');
     }
 
@@ -1012,10 +1097,12 @@ type ChallengeRequest = {
 
 /** A parsed instruction from a jsonParsed transaction. */
 type ParsedInstruction = {
-    parsed?: {
-        info: Record<string, unknown>;
-        type: string;
-    };
+    parsed?:
+        | {
+              info: Record<string, unknown>;
+              type: string;
+          }
+        | string;
     program?: string;
     programId?: string;
 };

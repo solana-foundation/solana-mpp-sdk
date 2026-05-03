@@ -778,6 +778,8 @@ impl Mpp {
                 ));
             }
             let matched = verify_sol_transfers(&instructions, recipient, primary_amount, splits)?;
+            let mut matched = matched;
+            verify_parsed_memo_instructions(&instructions, splits, &mut matched)?;
             validate_parsed_instruction_allowlist(
                 &instructions,
                 &matched,
@@ -802,7 +804,7 @@ impl Mpp {
                         method_details.network.as_deref(),
                     )
                 });
-            let matched = verify_spl_transfers(
+            let mut matched = verify_spl_transfers(
                 &instructions,
                 recipient,
                 &expected_mint.to_string(),
@@ -810,6 +812,7 @@ impl Mpp {
                 splits,
                 Some(expected_token_program),
             )?;
+            verify_parsed_memo_instructions(&instructions, splits, &mut matched)?;
             validate_parsed_instruction_allowlist(
                 &instructions,
                 &matched,
@@ -977,6 +980,7 @@ fn verify_versioned_transaction_pre_broadcast(
                 &mut matched_instruction_indexes,
             )?;
         }
+        verify_memo_instructions(tx, account_keys, splits, &mut matched_instruction_indexes)?;
         validate_instruction_allowlist(
             tx,
             account_keys,
@@ -1028,6 +1032,7 @@ fn verify_versioned_transaction_pre_broadcast(
                 &mut matched_instruction_indexes,
             )?;
         }
+        verify_memo_instructions(tx, account_keys, splits, &mut matched_instruction_indexes)?;
         validate_instruction_allowlist(
             tx,
             account_keys,
@@ -1178,6 +1183,15 @@ fn validate_instruction_allowlist(
         if program_id == &compute_budget_program {
             validate_compute_budget_instruction(ix)?;
             continue;
+        }
+
+        if program_id == &Pubkey::from_str(programs::MEMO_PROGRAM).unwrap() {
+            if matched_payment_instruction_indexes.contains(&index) {
+                continue;
+            }
+            return Err(VerificationError::invalid_payload(
+                "Unexpected Memo Program instruction in payment transaction",
+            ));
         }
 
         if program_id == &system_program {
@@ -1391,6 +1405,47 @@ fn verify_sol_transfer_instructions(
     Err(VerificationError::invalid_amount(format!(
         "No matching SOL transfer of {amount} lamports to {recipient}"
     )))
+}
+
+fn verify_memo_instructions(
+    tx: &VersionedTransaction,
+    account_keys: &[Pubkey],
+    splits: &[Split],
+    matched_instruction_indexes: &mut HashSet<usize>,
+) -> Result<(), VerificationError> {
+    let memo_program = Pubkey::from_str(programs::MEMO_PROGRAM).unwrap();
+    for split in splits {
+        let Some(memo) = split.memo.as_deref() else {
+            continue;
+        };
+        let expected_data = memo.as_bytes();
+        if expected_data.len() > 566 {
+            return Err(VerificationError::invalid_payload(
+                "memo cannot exceed 566 bytes",
+            ));
+        }
+
+        let mut found = false;
+        for (index, ix) in tx.message.instructions().iter().enumerate() {
+            if matched_instruction_indexes.contains(&index) {
+                continue;
+            }
+            let program_id = account_keys
+                .get(ix.program_id_index as usize)
+                .ok_or_else(|| VerificationError::invalid_payload("Invalid program_id_index"))?;
+            if program_id == &memo_program && ix.data.as_slice() == expected_data {
+                matched_instruction_indexes.insert(index);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(VerificationError::invalid_payload(format!(
+                "No memo instruction found for split memo \"{memo}\""
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Check that the transaction contains an SPL Token transferChecked of `amount` to `recipient`'s ATA.
@@ -1693,6 +1748,15 @@ fn validate_parsed_instruction_allowlist(
             continue;
         }
 
+        if program_id == Some(programs::MEMO_PROGRAM) {
+            if matched_payment_instruction_indexes.contains(&index) {
+                continue;
+            }
+            return Err(VerificationError::invalid_payload(
+                "Unexpected Memo Program instruction in payment transaction",
+            ));
+        }
+
         if program_id == Some(programs::SYSTEM_PROGRAM) {
             if matched_payment_instruction_indexes.contains(&index) {
                 continue;
@@ -1753,7 +1817,57 @@ fn parsed_program_id(ix: &serde_json::Value) -> Option<&str> {
     match ix.get("program").and_then(|program| program.as_str()) {
         Some("system") => Some(programs::SYSTEM_PROGRAM),
         Some("compute-budget") => Some(programs::COMPUTE_BUDGET_PROGRAM),
+        Some("spl-memo") => Some(programs::MEMO_PROGRAM),
         Some("spl-associated-token-account") => Some(programs::ASSOCIATED_TOKEN_PROGRAM),
+        _ => None,
+    }
+}
+
+fn verify_parsed_memo_instructions(
+    instructions: &[serde_json::Value],
+    splits: &[Split],
+    matched_instruction_indexes: &mut HashSet<usize>,
+) -> Result<(), VerificationError> {
+    for split in splits {
+        let Some(memo) = split.memo.as_deref() else {
+            continue;
+        };
+        if memo.as_bytes().len() > 566 {
+            return Err(VerificationError::invalid_payload(
+                "memo cannot exceed 566 bytes",
+            ));
+        }
+
+        let mut found = false;
+        for (index, ix) in instructions.iter().enumerate() {
+            if matched_instruction_indexes.contains(&index) {
+                continue;
+            }
+            if parsed_program_id(ix) != Some(programs::MEMO_PROGRAM) {
+                continue;
+            }
+            if parsed_memo_text(ix) == Some(memo) {
+                matched_instruction_indexes.insert(index);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(VerificationError::invalid_payload(format!(
+                "No memo instruction found for split memo \"{memo}\""
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parsed_memo_text(ix: &serde_json::Value) -> Option<&str> {
+    match ix.get("parsed") {
+        Some(serde_json::Value::String(memo)) => Some(memo.as_str()),
+        Some(serde_json::Value::Object(parsed)) => parsed
+            .get("info")
+            .and_then(|info| info.as_object())
+            .and_then(|info| string_field(info, &["memo", "data"])),
         _ => None,
     }
 }
@@ -2325,6 +2439,9 @@ mod tests {
     fn token_program_id() -> Pubkey {
         Pubkey::from_str(programs::TOKEN_PROGRAM).unwrap()
     }
+    fn memo_program_id() -> Pubkey {
+        Pubkey::from_str(programs::MEMO_PROGRAM).unwrap()
+    }
     fn ata_program_id() -> Pubkey {
         Pubkey::from_str(programs::ASSOCIATED_TOKEN_PROGRAM).unwrap()
     }
@@ -2360,6 +2477,14 @@ mod tests {
             program_id: Pubkey::from_str(COMPUTE_BUDGET_PROGRAM).unwrap(),
             accounts: vec![],
             data,
+        }
+    }
+
+    fn memo_ix(memo: &str) -> Instruction {
+        Instruction {
+            program_id: memo_program_id(),
+            accounts: vec![],
+            data: memo.as_bytes().to_vec(),
         }
     }
 
@@ -4019,6 +4144,129 @@ mod tests {
         assert!(err.message.contains("Missing split transfer"));
     }
 
+    #[test]
+    fn verify_parsed_memo_instructions_accepts_string_and_info_forms() {
+        let instructions = vec![
+            parsed_memo_ix("platform fee"),
+            serde_json::json!({
+                "program": "spl-memo",
+                "parsed": {
+                    "info": {
+                        "memo": "referrer fee"
+                    }
+                }
+            }),
+        ];
+        let splits = vec![
+            Split {
+                recipient: "PlatformRecipient".to_string(),
+                amount: "30000".to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            },
+            Split {
+                recipient: "ReferrerRecipient".to_string(),
+                amount: "20000".to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("referrer fee".to_string()),
+            },
+        ];
+        let mut matched = HashSet::new();
+
+        verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap();
+
+        assert_eq!(matched, HashSet::from([0, 1]));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_accepts_info_data_form() {
+        let instructions = vec![serde_json::json!({
+            "programId": programs::MEMO_PROGRAM,
+            "parsed": {
+                "info": {
+                    "data": "platform fee"
+                }
+            }
+        })];
+        let splits = vec![Split {
+            recipient: "PlatformRecipient".to_string(),
+            amount: "50000".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("platform fee".to_string()),
+        }];
+        let mut matched = HashSet::new();
+
+        verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap();
+
+        assert_eq!(matched, HashSet::from([0]));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_rejects_missing_memo() {
+        let instructions = vec![parsed_memo_ix("wrong memo")];
+        let splits = vec![Split {
+            recipient: "PlatformRecipient".to_string(),
+            amount: "50000".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("platform fee".to_string()),
+        }];
+        let mut matched = HashSet::new();
+
+        let err =
+            verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap_err();
+
+        assert!(err.message.contains("No memo instruction found"));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_requires_distinct_memos_for_duplicate_split_memos() {
+        let instructions = vec![parsed_memo_ix("platform fee")];
+        let splits = vec![
+            Split {
+                recipient: "PlatformRecipient".to_string(),
+                amount: "30000".to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            },
+            Split {
+                recipient: "ReferrerRecipient".to_string(),
+                amount: "20000".to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            },
+        ];
+        let mut matched = HashSet::new();
+
+        let err =
+            verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap_err();
+
+        assert!(err.message.contains("No memo instruction found"));
+    }
+
+    #[test]
+    fn parsed_allowlist_rejects_unrequested_memo() {
+        let instructions = vec![parsed_memo_ix("not requested")];
+
+        let err = validate_parsed_instruction_allowlist(
+            &instructions,
+            &HashSet::new(),
+            None,
+            &HashSet::new(),
+            None,
+            None,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+
+        assert!(err.message.contains("Unexpected Memo Program instruction"));
+    }
+
     // ── find_spl_transfer tests ──
 
     #[test]
@@ -4347,6 +4595,14 @@ mod tests {
         })
     }
 
+    fn parsed_memo_ix(memo: &str) -> serde_json::Value {
+        serde_json::json!({
+            "program": "spl-memo",
+            "programId": programs::MEMO_PROGRAM,
+            "parsed": memo
+        })
+    }
+
     // ── verify_ata_owner edge cases ──
 
     #[test]
@@ -4410,6 +4666,123 @@ mod tests {
         };
 
         assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn sol_transfer_with_split_memo_passes_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tx = dummy_tx(
+            vec![
+                system_transfer_ix(&sender, &recipient, primary_amount),
+                system_transfer_ix(&sender, &split_recipient, split_amount),
+                memo_ix("platform fee"),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn sol_transfer_missing_split_memo_rejected_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tx = dummy_tx(
+            vec![
+                system_transfer_ix(&sender, &recipient, primary_amount),
+                system_transfer_ix(&sender, &split_recipient, split_amount),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No memo instruction found"));
+    }
+
+    #[test]
+    fn sol_transfer_wrong_split_memo_rejected_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tx = dummy_tx(
+            vec![
+                system_transfer_ix(&sender, &recipient, primary_amount),
+                system_transfer_ix(&sender, &split_recipient, split_amount),
+                memo_ix("wrong memo"),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "SOL", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No memo instruction found"));
+    }
+
+    #[test]
+    fn sol_transfer_unrequested_memo_rejected_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let amount = 500_000u64;
+
+        let tx = dummy_tx(
+            vec![
+                system_transfer_ix(&sender, &recipient, amount),
+                memo_ix("not requested"),
+            ],
+            &sender,
+        );
+        let request = charge_request(amount, "SOL", &recipient);
+        let method_details = MethodDetails::default();
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("Unexpected Memo Program instruction"));
     }
 
     #[test]
@@ -4539,6 +4912,96 @@ mod tests {
         };
 
         assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn spl_transfer_with_split_memo_passes_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+        let split_dest_ata = derive_ata(&split_recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![
+                spl_transfer_checked_ix(&source_ata, &mint, &dest_ata, &sender, primary_amount, 6),
+                spl_transfer_checked_ix(
+                    &source_ata,
+                    &mint,
+                    &split_dest_ata,
+                    &sender,
+                    split_amount,
+                    6,
+                ),
+                memo_ix("platform fee"),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "USDC", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        assert!(verify_transaction_pre_broadcast(&tx, &request, &method_details).is_ok());
+    }
+
+    #[test]
+    fn spl_transfer_missing_split_memo_rejected_pre_broadcast() {
+        let sender = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let primary_amount = 800_000u64;
+        let split_amount = 200_000u64;
+        let total = primary_amount + split_amount;
+
+        let tp = token_program_id();
+        let source_ata = derive_ata(&sender, &mint, &tp);
+        let dest_ata = derive_ata(&recipient, &mint, &tp);
+        let split_dest_ata = derive_ata(&split_recipient, &mint, &tp);
+
+        let tx = dummy_tx(
+            vec![
+                spl_transfer_checked_ix(&source_ata, &mint, &dest_ata, &sender, primary_amount, 6),
+                spl_transfer_checked_ix(
+                    &source_ata,
+                    &mint,
+                    &split_dest_ata,
+                    &sender,
+                    split_amount,
+                    6,
+                ),
+            ],
+            &sender,
+        );
+        let request = charge_request(total, "USDC", &recipient);
+        let method_details = MethodDetails {
+            splits: Some(vec![Split {
+                recipient: split_recipient.to_string(),
+                amount: split_amount.to_string(),
+                ata_creation_required: None,
+                label: None,
+                memo: Some("platform fee".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        let err = verify_transaction_pre_broadcast(&tx, &request, &method_details).unwrap_err();
+        assert!(err.message.contains("No memo instruction found"));
     }
 
     // ── ChargeOptions fee_payer flag in method details ──

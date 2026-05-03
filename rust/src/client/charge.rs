@@ -330,6 +330,7 @@ fn build_sol_instructions(
             &split_recipient,
             split_amount,
         ));
+        push_memo_instruction(instructions, split.memo.as_deref())?;
     }
 
     Ok(())
@@ -355,33 +356,36 @@ fn build_spl_instructions(
 
     let payer = fee_payer.copied().unwrap_or(*signer_pubkey);
 
-    let mut add_spl_transfer =
-        |dest_owner: &Pubkey, transfer_amount: u64, create_ata: bool| -> Result<(), Error> {
-            let dest_ata = get_associated_token_address(dest_owner, &mint, &token_program);
+    let add_spl_transfer = |instructions: &mut Vec<Instruction>,
+                            dest_owner: &Pubkey,
+                            transfer_amount: u64,
+                            create_ata: bool|
+     -> Result<(), Error> {
+        let dest_ata = get_associated_token_address(dest_owner, &mint, &token_program);
 
-            if create_ata {
-                instructions.push(create_associated_token_account_idempotent(
-                    &payer,
-                    dest_owner,
-                    &mint,
-                    &token_program,
-                ));
-            }
-
-            instructions.push(transfer_checked_ix(
-                &token_program,
-                &source_ata,
+        if create_ata {
+            instructions.push(create_associated_token_account_idempotent(
+                &payer,
+                dest_owner,
                 &mint,
-                &dest_ata,
-                signer_pubkey,
-                transfer_amount,
-                decimals,
+                &token_program,
             ));
+        }
 
-            Ok(())
-        };
+        instructions.push(transfer_checked_ix(
+            &token_program,
+            &source_ata,
+            &mint,
+            &dest_ata,
+            signer_pubkey,
+            transfer_amount,
+            decimals,
+        ));
 
-    add_spl_transfer(recipient, primary_amount, false)?;
+        Ok(())
+    };
+
+    add_spl_transfer(instructions, recipient, primary_amount, false)?;
 
     for split in splits {
         let split_recipient = Pubkey::from_str(&split.recipient)
@@ -391,12 +395,35 @@ fn build_spl_instructions(
             .parse()
             .map_err(|_| Error::Other(format!("Invalid split amount: {}", split.amount)))?;
         add_spl_transfer(
+            instructions,
             &split_recipient,
             split_amount,
             fee_payer.is_none() || split.ata_creation_required == Some(true),
         )?;
+        push_memo_instruction(instructions, split.memo.as_deref())?;
     }
 
+    Ok(())
+}
+
+fn push_memo_instruction(
+    instructions: &mut Vec<Instruction>,
+    memo: Option<&str>,
+) -> Result<(), Error> {
+    let Some(memo) = memo else {
+        return Ok(());
+    };
+    let data = memo.as_bytes().to_vec();
+    if data.len() > 566 {
+        return Err(Error::Other("memo cannot exceed 566 bytes".into()));
+    }
+    let memo_program = Pubkey::from_str(programs::MEMO_PROGRAM)
+        .map_err(|e| Error::Other(format!("Invalid memo program: {e}")))?;
+    instructions.push(Instruction {
+        program_id: memo_program,
+        accounts: vec![],
+        data,
+    });
     Ok(())
 }
 
@@ -856,6 +883,49 @@ mod tests {
         build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits).unwrap();
         // 1 primary transfer + 1 split transfer
         assert_eq!(instructions.len(), 2);
+    }
+
+    #[test]
+    fn build_sol_instructions_with_split_memo() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "500".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("platform fee".to_string()),
+        }];
+        let mut instructions = Vec::new();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits).unwrap();
+
+        assert_eq!(instructions.len(), 3);
+        assert_eq!(
+            instructions[2].program_id,
+            Pubkey::from_str(programs::MEMO_PROGRAM).unwrap()
+        );
+        assert!(instructions[2].accounts.is_empty());
+        assert_eq!(instructions[2].data, b"platform fee");
+    }
+
+    #[test]
+    fn build_sol_instructions_rejects_long_split_memo() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let split_recipient = Pubkey::new_unique();
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "500".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("x".repeat(567)),
+        }];
+        let mut instructions = Vec::new();
+        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits)
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("memo cannot exceed 566 bytes"));
     }
 
     #[test]
@@ -1432,6 +1502,66 @@ mod tests {
         .unwrap();
         // Primary recipient ATA creation is out of scope; split ATA creation is allowed.
         assert_eq!(ixs.len(), 3);
+    }
+
+    #[test]
+    fn build_spl_with_split_memo() {
+        let signer_pk = Pubkey::new_unique();
+        let recipient = Pubkey::from_str(RECIPIENT).unwrap();
+        let split_recipient = Pubkey::new_unique();
+        let rpc = dummy_rpc();
+        let md = MethodDetails {
+            token_program: Some(programs::TOKEN_PROGRAM.to_string()),
+            decimals: Some(6),
+            ..Default::default()
+        };
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "1000".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("platform fee".to_string()),
+        }];
+        let mut ixs = vec![];
+        build_spl_instructions(
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+        )
+        .unwrap();
+
+        assert_eq!(ixs.len(), 4);
+        assert_eq!(
+            ixs[3].program_id,
+            Pubkey::from_str(programs::MEMO_PROGRAM).unwrap()
+        );
+        assert!(ixs[3].accounts.is_empty());
+        assert_eq!(ixs[3].data, b"platform fee");
+    }
+
+    #[test]
+    fn build_spl_rejects_long_split_memo() {
+        let signer_pk = Pubkey::new_unique();
+        let recipient = Pubkey::from_str(RECIPIENT).unwrap();
+        let split_recipient = Pubkey::new_unique();
+        let rpc = dummy_rpc();
+        let md = MethodDetails {
+            token_program: Some(programs::TOKEN_PROGRAM.to_string()),
+            decimals: Some(6),
+            ..Default::default()
+        };
+        let splits = vec![Split {
+            recipient: split_recipient.to_string(),
+            amount: "1000".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("x".repeat(567)),
+        }];
+        let mut ixs = vec![];
+        let err = build_spl_instructions(
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+        )
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("memo cannot exceed 566 bytes"));
     }
 
     #[test]

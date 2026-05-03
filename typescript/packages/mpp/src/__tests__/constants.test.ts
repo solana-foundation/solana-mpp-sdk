@@ -6,6 +6,7 @@ import {
     CASH,
     COMPUTE_BUDGET_PROGRAM,
     DEFAULT_RPC_URLS,
+    MEMO_PROGRAM,
     PYUSD,
     SYSTEM_PROGRAM,
     TOKEN_2022_PROGRAM,
@@ -37,6 +38,10 @@ describe('token program addresses', () => {
 
     test('COMPUTE_BUDGET_PROGRAM is the expected base58 address', () => {
         expect(COMPUTE_BUDGET_PROGRAM).toBe('ComputeBudget111111111111111111111111111111');
+    });
+
+    test('MEMO_PROGRAM is the expected base58 address', () => {
+        expect(MEMO_PROGRAM).toBe('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
     });
 });
 
