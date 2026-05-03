@@ -42,7 +42,10 @@ pub async fn build_charge_transaction(
 
 /// Options for building a Solana charge transaction.
 #[derive(Debug, Clone, Default)]
-pub struct BuildChargeTransactionOptions {}
+pub struct BuildChargeTransactionOptions {
+    /// Optional root payment memo. Spec-aligned callers pass `ChargeRequest.externalId`.
+    pub external_id: Option<String>,
+}
 
 /// Options for selecting one Solana charge challenge from a challenge set.
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,7 +66,7 @@ pub async fn build_charge_transaction_with_options(
     currency: &str,
     recipient: &str,
     method_details: &MethodDetails,
-    _options: BuildChargeTransactionOptions,
+    options: BuildChargeTransactionOptions,
 ) -> Result<CredentialPayload, Error> {
     let total_amount: u64 = amount
         .parse()
@@ -133,6 +136,7 @@ pub async fn build_charge_transaction_with_options(
             mint_str,
             method_details,
             primary_amount,
+            options.external_id.as_deref(),
             splits,
             fee_payer_pubkey.as_ref(),
         )?;
@@ -142,6 +146,7 @@ pub async fn build_charge_transaction_with_options(
             &signer_pubkey,
             &recipient_pubkey,
             primary_amount,
+            options.external_id.as_deref(),
             splits,
         )?;
     }
@@ -208,13 +213,16 @@ pub async fn build_credential_header(
         .as_deref()
         .ok_or_else(|| Error::Other("No recipient in challenge".into()))?;
 
-    let payload = build_charge_transaction(
+    let payload = build_charge_transaction_with_options(
         signer,
         rpc,
         &request.amount,
         &request.currency,
         recipient,
         &method_details,
+        BuildChargeTransactionOptions {
+            external_id: request.external_id.clone(),
+        },
     )
     .await?;
 
@@ -310,6 +318,7 @@ fn build_sol_instructions(
     signer_pubkey: &Pubkey,
     recipient: &Pubkey,
     primary_amount: u64,
+    external_id: Option<&str>,
     splits: &[Split],
 ) -> Result<(), Error> {
     instructions.push(system_instruction::transfer(
@@ -317,6 +326,7 @@ fn build_sol_instructions(
         recipient,
         primary_amount,
     ));
+    push_memo_instruction(instructions, external_id)?;
 
     for split in splits {
         let split_recipient = Pubkey::from_str(&split.recipient)
@@ -345,6 +355,7 @@ fn build_spl_instructions(
     spl: &str,
     method_details: &MethodDetails,
     primary_amount: u64,
+    external_id: Option<&str>,
     splits: &[Split],
     fee_payer: Option<&Pubkey>,
 ) -> Result<(), Error> {
@@ -386,6 +397,7 @@ fn build_spl_instructions(
     };
 
     add_spl_transfer(instructions, recipient, primary_amount, false)?;
+    push_memo_instruction(instructions, external_id)?;
 
     for split in splits {
         let split_recipient = Pubkey::from_str(&split.recipient)
@@ -860,7 +872,8 @@ mod tests {
         let signer = Pubkey::new_unique();
         let recipient = Pubkey::new_unique();
         let mut instructions = Vec::new();
-        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000_000, &[]).unwrap();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000_000, None, &[])
+            .unwrap();
         assert_eq!(instructions.len(), 1);
         // The system transfer instruction should use the system program
         let system_program = Pubkey::from_str(programs::SYSTEM_PROGRAM).unwrap();
@@ -880,9 +893,34 @@ mod tests {
             memo: None,
         }];
         let mut instructions = Vec::new();
-        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits).unwrap();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, None, &splits)
+            .unwrap();
         // 1 primary transfer + 1 split transfer
         assert_eq!(instructions.len(), 2);
+    }
+
+    #[test]
+    fn build_sol_instructions_with_external_id_memo() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let mut instructions = Vec::new();
+        build_sol_instructions(
+            &mut instructions,
+            &signer,
+            &recipient,
+            1_000,
+            Some("order-123"),
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(instructions.len(), 2);
+        assert_eq!(
+            instructions[1].program_id,
+            Pubkey::from_str(programs::MEMO_PROGRAM).unwrap()
+        );
+        assert!(instructions[1].accounts.is_empty());
+        assert_eq!(instructions[1].data, b"order-123");
     }
 
     #[test]
@@ -898,7 +936,8 @@ mod tests {
             memo: Some("platform fee".to_string()),
         }];
         let mut instructions = Vec::new();
-        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits).unwrap();
+        build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, None, &splits)
+            .unwrap();
 
         assert_eq!(instructions.len(), 3);
         assert_eq!(
@@ -922,8 +961,28 @@ mod tests {
             memo: Some("x".repeat(567)),
         }];
         let mut instructions = Vec::new();
-        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits)
-            .unwrap_err();
+        let err =
+            build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, None, &splits)
+                .unwrap_err();
+
+        assert!(format!("{err}").contains("memo cannot exceed 566 bytes"));
+    }
+
+    #[test]
+    fn build_sol_instructions_rejects_long_external_id_memo() {
+        let signer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let long_memo = "x".repeat(567);
+        let mut instructions = Vec::new();
+        let err = build_sol_instructions(
+            &mut instructions,
+            &signer,
+            &recipient,
+            1_000,
+            Some(long_memo.as_str()),
+            &[],
+        )
+        .unwrap_err();
 
         assert!(format!("{err}").contains("memo cannot exceed 566 bytes"));
     }
@@ -940,7 +999,8 @@ mod tests {
             memo: None,
         }];
         let mut instructions = Vec::new();
-        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits);
+        let err =
+            build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, None, &splits);
         assert!(err.is_err());
         let msg = format!("{}", err.unwrap_err());
         assert!(msg.contains("Invalid split recipient"));
@@ -959,7 +1019,8 @@ mod tests {
             memo: None,
         }];
         let mut instructions = Vec::new();
-        let err = build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, &splits);
+        let err =
+            build_sol_instructions(&mut instructions, &signer, &recipient, 1_000, None, &splits);
         assert!(err.is_err());
         let msg = format!("{}", err.unwrap_err());
         assert!(msg.contains("Invalid split amount"));
@@ -1443,11 +1504,46 @@ mod tests {
             USDC_MINT,
             &md,
             1_000_000,
+            None,
             &[],
             None,
         )
         .unwrap();
         assert_eq!(ixs.len(), 1);
+    }
+
+    #[test]
+    fn build_spl_with_external_id_memo() {
+        let signer_pk = Pubkey::new_unique();
+        let recipient = Pubkey::from_str(RECIPIENT).unwrap();
+        let rpc = dummy_rpc();
+        let md = MethodDetails {
+            token_program: Some(programs::TOKEN_PROGRAM.to_string()),
+            decimals: Some(6),
+            ..Default::default()
+        };
+        let mut ixs = vec![];
+        build_spl_instructions(
+            &mut ixs,
+            &signer_pk,
+            &recipient,
+            &rpc,
+            USDC_MINT,
+            &md,
+            1_000_000,
+            Some("order-123"),
+            &[],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(ixs.len(), 2);
+        assert_eq!(
+            ixs[1].program_id,
+            Pubkey::from_str(programs::MEMO_PROGRAM).unwrap()
+        );
+        assert!(ixs[1].accounts.is_empty());
+        assert_eq!(ixs[1].data, b"order-123");
     }
 
     #[test]
@@ -1470,6 +1566,7 @@ mod tests {
             USDC_MINT,
             &md,
             1_000_000,
+            None,
             &[],
             Some(&fee_payer),
         )
@@ -1497,7 +1594,7 @@ mod tests {
         }];
         let mut ixs = vec![];
         build_spl_instructions(
-            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, None, &splits, None,
         )
         .unwrap();
         // Primary recipient ATA creation is out of scope; split ATA creation is allowed.
@@ -1524,7 +1621,7 @@ mod tests {
         }];
         let mut ixs = vec![];
         build_spl_instructions(
-            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, None, &splits, None,
         )
         .unwrap();
 
@@ -1557,7 +1654,7 @@ mod tests {
         }];
         let mut ixs = vec![];
         let err = build_spl_instructions(
-            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, None, &splits, None,
         )
         .unwrap_err();
 
@@ -1594,6 +1691,7 @@ mod tests {
             USDC_MINT,
             &md,
             1_000_000,
+            None,
             &splits,
             Some(&fee_payer),
         )
@@ -1634,6 +1732,7 @@ mod tests {
             USDC_MINT,
             &md,
             1_000_000,
+            None,
             &splits,
             Some(&fee_payer),
         )
@@ -1659,6 +1758,7 @@ mod tests {
             "not-a-mint!!!",
             &md,
             1_000_000,
+            None,
             &[],
             None,
         );
@@ -1685,7 +1785,7 @@ mod tests {
         }];
         let mut ixs = vec![];
         let err = build_spl_instructions(
-            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, None, &splits, None,
         );
         assert!(err.is_err());
         assert!(format!("{}", err.unwrap_err()).contains("Invalid split recipient"));
@@ -1711,7 +1811,7 @@ mod tests {
         }];
         let mut ixs = vec![];
         let err = build_spl_instructions(
-            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, &splits, None,
+            &mut ixs, &signer_pk, &recipient, &rpc, USDC_MINT, &md, 1_000_000, None, &splits, None,
         );
         assert!(err.is_err());
         assert!(format!("{}", err.unwrap_err()).contains("Invalid split amount"));

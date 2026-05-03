@@ -18,6 +18,7 @@ type BuildOptions struct {
 	Broadcast        bool
 	ComputeUnitLimit uint32
 	ComputeUnitPrice uint64
+	ExternalID       string
 }
 
 // BuildChargeTransaction creates a payment credential payload from challenge fields.
@@ -47,7 +48,7 @@ func BuildChargeTransaction(
 		options.ComputeUnitPrice = 1
 	}
 
-	instructions := make([]solana.Instruction, 0, 2+1+len(methodDetails.Splits)*2)
+	instructions := make([]solana.Instruction, 0, 2+2+len(methodDetails.Splits)*3)
 	if ix, err := solanautil.BuildComputeUnitPrice(options.ComputeUnitPrice); err == nil {
 		instructions = append(instructions, ix)
 	}
@@ -70,6 +71,13 @@ func BuildChargeTransaction(
 			return protocol.CredentialPayload{}, err
 		}
 		instructions = append(instructions, ix)
+		if options.ExternalID != "" {
+			memoIx, err := solanautil.BuildMemoInstruction(options.ExternalID)
+			if err != nil {
+				return protocol.CredentialPayload{}, err
+			}
+			instructions = append(instructions, memoIx)
+		}
 		for _, split := range methodDetails.Splits {
 			splitKey, err := solana.PublicKeyFromBase58(split.Recipient)
 			if err != nil {
@@ -84,6 +92,13 @@ func BuildChargeTransaction(
 				return protocol.CredentialPayload{}, err
 			}
 			instructions = append(instructions, ix)
+			if split.Memo != "" {
+				memoIx, err := solanautil.BuildMemoInstruction(split.Memo)
+				if err != nil {
+					return protocol.CredentialPayload{}, err
+				}
+				instructions = append(instructions, memoIx)
+			}
 		}
 	} else {
 		resolvedMint := protocol.ResolveMint(currency, methodDetails.Network)
@@ -129,6 +144,13 @@ func BuildChargeTransaction(
 		if err := addTransfer(recipientKey, primaryAmount); err != nil {
 			return protocol.CredentialPayload{}, err
 		}
+		if options.ExternalID != "" {
+			memoIx, err := solanautil.BuildMemoInstruction(options.ExternalID)
+			if err != nil {
+				return protocol.CredentialPayload{}, err
+			}
+			instructions = append(instructions, memoIx)
+		}
 		for _, split := range methodDetails.Splits {
 			splitKey, err := solana.PublicKeyFromBase58(split.Recipient)
 			if err != nil {
@@ -140,6 +162,13 @@ func BuildChargeTransaction(
 			}
 			if err := addTransfer(splitKey, splitAmount); err != nil {
 				return protocol.CredentialPayload{}, err
+			}
+			if split.Memo != "" {
+				memoIx, err := solanautil.BuildMemoInstruction(split.Memo)
+				if err != nil {
+					return protocol.CredentialPayload{}, err
+				}
+				instructions = append(instructions, memoIx)
 			}
 		}
 	}
@@ -215,6 +244,7 @@ func BuildCredentialHeaderWithOptions(
 			return "", err
 		}
 	}
+	options.ExternalID = request.ExternalID
 	payload, err := BuildChargeTransaction(ctx, signer, rpcClient, request.Amount, request.Currency, request.Recipient, details, options)
 	if err != nil {
 		return "", err

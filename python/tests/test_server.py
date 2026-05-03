@@ -10,18 +10,22 @@ from solana_mpp._types import ChallengeEcho, PaymentCredential
 from solders.pubkey import Pubkey
 
 from solana_mpp.protocol.intents import ChargeRequest
-from solana_mpp.protocol.solana import MethodDetails, Split, TOKEN_2022_PROGRAM
+from solana_mpp.protocol.solana import MEMO_PROGRAM, MethodDetails, Split, TOKEN_2022_PROGRAM
 from solana_mpp.server.mpp import (
     ChargeOptions,
     Config,
     Mpp,
+    _verify_parsed_memo_instructions,
     _verify_parsed_sol_transfers,
     _verify_parsed_spl_transfers,
 )
 
 TEST_SECRET = "test-secret-key-that-is-long-enough-for-hmac-sha256"
 TEST_RECIPIENT = "11111111111111111111111111111112"
+VALID_SIGNATURE = "1111111111111111111111111111111111111111111111111111111111111111"
+DUMMY_TRANSACTION = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+USDC_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 ATA_PROGRAM = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
 
 
@@ -40,10 +44,11 @@ class FakeResponse:
 
 
 class FakeRPC:
-    def __init__(self, tx=None, send_value="sig-123", statuses=None):
+    def __init__(self, tx=None, send_value="sig-123", statuses=None, token_accounts=None):
         self.tx = tx
         self.send_value = send_value
         self.statuses = statuses if statuses is not None else [{"err": None}]
+        self.token_accounts = token_accounts or {}
         self.sent = []
 
     async def get_transaction(self, *_args, **_kwargs):
@@ -70,8 +75,8 @@ def mpp() -> Mpp:
                             "parsed": {
                                 "type": "transferChecked",
                                 "info": {
-                                    "destination": "token-account-1",
-                                    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+                                    "destination": _derive_ata(TEST_RECIPIENT, USDC_DEVNET),
+                                    "mint": USDC_DEVNET,
                                     "tokenAmount": {"amount": "1000000"},
                                 },
                             },
@@ -80,7 +85,7 @@ def mpp() -> Mpp:
                 }
             },
         },
-        token_accounts={"token-account-1": {"owner": TEST_RECIPIENT, "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"}},
+        token_accounts={_derive_ata(TEST_RECIPIENT, USDC_DEVNET): {"owner": TEST_RECIPIENT, "mint": USDC_DEVNET}},
     )
     config = Config(
         recipient=TEST_RECIPIENT,
@@ -140,7 +145,11 @@ class TestCharge:
     def test_charge_with_splits(self, mpp: Mpp):
         options = ChargeOptions(
             splits=[
-                {"recipient": "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111", "amount": "500000", "memo": "Vendor payout"},
+                {
+                    "recipient": "VendorPayoutsWaLLetxxxxxxxxxxxxxxxxxxxxxx1111",
+                    "amount": "500000",
+                    "memo": "Vendor payout",
+                },
                 {"recipient": "ProcessorFeeWaLLetxxxxxxxxxxxxxxxxxxxxxxx1111", "amount": "29000"},
             ],
         )
@@ -219,7 +228,7 @@ class TestVerifyCredential:
         echo = challenge.to_echo()
         credential = PaymentCredential(
             challenge=echo,
-            payload={"type": "signature", "signature": "1111111111111111111111111111111111111111111111111111111111111111"},
+            payload={"type": "signature", "signature": VALID_SIGNATURE},
         )
         # First call succeeds
         receipt = await mpp.verify_credential(credential)
@@ -261,6 +270,7 @@ class TestVerifyCredential:
             await mpp.verify_credential(credential)
 
     async def test_signature_verification_fetches_and_checks_transaction(self):
+        recipient_ata = _derive_ata(TEST_RECIPIENT, USDC_DEVNET)
         tx = {
             "meta": {"err": None},
             "transaction": {
@@ -271,8 +281,8 @@ class TestVerifyCredential:
                             "parsed": {
                                 "type": "transferChecked",
                                 "info": {
-                                    "destination": "token-account-1",
-                                    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+                                    "destination": recipient_ata,
+                                    "mint": USDC_DEVNET,
                                     "tokenAmount": {"amount": "1000000"},
                                 },
                             },
@@ -281,7 +291,7 @@ class TestVerifyCredential:
                 }
             },
         }
-        rpc = FakeRPC(tx=tx, token_accounts={"token-account-1": {"owner": TEST_RECIPIENT, "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"}})
+        rpc = FakeRPC(tx=tx, token_accounts={recipient_ata: {"owner": TEST_RECIPIENT, "mint": USDC_DEVNET}})
         mpp = Mpp(
             Config(
                 recipient=TEST_RECIPIENT,
@@ -293,11 +303,50 @@ class TestVerifyCredential:
             )
         )
         challenge = mpp.charge("1.00")
-        credential = PaymentCredential(challenge=challenge.to_echo(), payload={"type": "signature", "signature": "1111111111111111111111111111111111111111111111111111111111111111"})
+        credential = PaymentCredential(
+            challenge=challenge.to_echo(),
+            payload={"type": "signature", "signature": VALID_SIGNATURE},
+        )
 
         receipt = await mpp.verify_credential(credential)
         assert receipt.is_success()
         assert receipt.reference == credential.payload["signature"]
+
+    async def test_signature_verification_checks_external_id_memo(self):
+        tx = {
+            "meta": {"err": None},
+            "transaction": {
+                "message": {
+                    "instructions": [
+                        {
+                            "program": "system",
+                            "parsed": {"type": "transfer", "info": {"destination": TEST_RECIPIENT, "lamports": "1000"}},
+                        },
+                        {"program": "spl-memo", "parsed": "order-123"},
+                    ]
+                }
+            },
+        }
+        rpc = FakeRPC(tx=tx)
+        mpp = Mpp(
+            Config(
+                recipient=TEST_RECIPIENT,
+                currency="SOL",
+                decimals=9,
+                network="devnet",
+                secret_key=TEST_SECRET,
+                rpc=rpc,
+            )
+        )
+        challenge = mpp.charge_with_options("0.000001", ChargeOptions(external_id="order-123"))
+        credential = PaymentCredential(
+            challenge=challenge.to_echo(),
+            payload={"type": "signature", "signature": VALID_SIGNATURE},
+        )
+
+        receipt = await mpp.verify_credential(credential)
+        assert receipt.is_success()
+        assert receipt.external_id == "order-123"
 
     async def test_transaction_verification_broadcasts_and_checks_transaction(self, monkeypatch: pytest.MonkeyPatch):
         tx = {
@@ -325,10 +374,17 @@ class TestVerifyCredential:
             )
         )
         challenge = mpp.charge_with_options("0.000001", ChargeOptions())
-        monkeypatch.setattr(server_mpp, "_extract_recent_blockhash", lambda _tx: "4vJ9JU1bJJQpUgJ8V6hYz7xXKz4F2tN6aBrZEcD3xKhs")
+        monkeypatch.setattr(
+            server_mpp,
+            "_extract_recent_blockhash",
+            lambda _tx: "4vJ9JU1bJJQpUgJ8V6hYz7xXKz4F2tN6aBrZEcD3xKhs",
+        )
         credential = PaymentCredential(
             challenge=challenge.to_echo(),
-            payload={"type": "transaction", "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},
+            payload={
+                "type": "transaction",
+                "transaction": DUMMY_TRANSACTION,
+            },
         )
 
         receipt = await mpp.verify_credential(credential)
@@ -347,8 +403,14 @@ class TestParsedTransferVerification:
             ]
         )
         instructions = [
-            {"program": "system", "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "800"}}},
-            {"program": "system", "parsed": {"type": "transfer", "info": {"destination": "recipient-2", "lamports": "100"}}},
+            {
+                "program": "system",
+                "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "800"}},
+            },
+            {
+                "program": "system",
+                "parsed": {"type": "transfer", "info": {"destination": "recipient-2", "lamports": "100"}},
+            },
         ]
 
         with pytest.raises(PaymentError, match="no matching SOL transfer"):
@@ -358,8 +420,14 @@ class TestParsedTransferVerification:
         request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1")
         details = MethodDetails(splits=[Split(recipient="recipient-1", amount="200")])
         instructions = [
-            {"program": "system", "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "800"}}},
-            {"program": "system", "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "200"}}},
+            {
+                "program": "system",
+                "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "800"}},
+            },
+            {
+                "program": "system",
+                "parsed": {"type": "transfer", "info": {"destination": "recipient-1", "lamports": "200"}},
+            },
         ]
 
         _verify_parsed_sol_transfers(instructions, request, details)
@@ -424,3 +492,47 @@ class TestParsedTransferVerification:
         ]
 
         _verify_parsed_spl_transfers(instructions, request, details)
+
+    @pytest.mark.parametrize(
+        "memo_instruction",
+        [
+            {"program": "spl-memo", "parsed": "order-123"},
+            {"programId": MEMO_PROGRAM, "parsed": {"info": {"memo": "order-123"}}},
+            {"programId": MEMO_PROGRAM, "parsed": {"info": {"data": "order-123"}}},
+        ],
+    )
+    def test_memo_verifier_accepts_external_id_shapes(self, memo_instruction: dict):
+        request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1", external_id="order-123")
+        details = MethodDetails()
+
+        _verify_parsed_memo_instructions([memo_instruction], request, details)
+
+    def test_memo_verifier_accepts_split_memo(self):
+        request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1")
+        details = MethodDetails(splits=[Split(recipient="recipient-2", amount="200", memo="platform fee")])
+        instructions = [{"programId": MEMO_PROGRAM, "parsed": "platform fee"}]
+
+        _verify_parsed_memo_instructions(instructions, request, details)
+
+    def test_memo_verifier_rejects_missing_external_id_memo(self):
+        request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1", external_id="order-123")
+        details = MethodDetails()
+
+        with pytest.raises(PaymentError, match="No memo instruction found for externalId memo"):
+            _verify_parsed_memo_instructions([], request, details)
+
+    def test_memo_verifier_rejects_unexpected_memo(self):
+        request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1")
+        details = MethodDetails()
+        instructions = [{"programId": MEMO_PROGRAM, "parsed": "unexpected"}]
+
+        with pytest.raises(PaymentError, match="unexpected Memo Program instruction"):
+            _verify_parsed_memo_instructions(instructions, request, details)
+
+    def test_memo_verifier_requires_distinct_duplicate_memos(self):
+        request = ChargeRequest(amount="1000", currency="sol", recipient="recipient-1", external_id="same")
+        details = MethodDetails(splits=[Split(recipient="recipient-2", amount="200", memo="same")])
+        instructions = [{"programId": MEMO_PROGRAM, "parsed": "same"}]
+
+        with pytest.raises(PaymentError, match="No memo instruction found for split memo"):
+            _verify_parsed_memo_instructions(instructions, request, details)

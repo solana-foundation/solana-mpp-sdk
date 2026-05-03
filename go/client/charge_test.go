@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	solana "github.com/gagliardetto/solana-go"
@@ -11,6 +12,27 @@ import (
 	"github.com/solana-foundation/mpp-sdk/go/internal/testutil"
 	"github.com/solana-foundation/mpp-sdk/go/protocol"
 )
+
+func memoTexts(t *testing.T, tx *solana.Transaction) []string {
+	t.Helper()
+	var texts []string
+	memoProgram := solana.MustPublicKeyFromBase58(protocol.MemoProgram)
+	for _, ix := range tx.Message.Instructions {
+		if tx.Message.AccountKeys[ix.ProgramIDIndex].Equals(memoProgram) {
+			texts = append(texts, string(ix.Data))
+		}
+	}
+	return texts
+}
+
+func hasMemoText(texts []string, want string) bool {
+	for _, text := range texts {
+		if text == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestBuildChargeTransactionSOLPull(t *testing.T) {
 	rpcClient := testutil.NewFakeRPC()
@@ -33,6 +55,35 @@ func TestBuildChargeTransactionSOLPull(t *testing.T) {
 	}
 	if tx.Signatures[0].IsZero() {
 		t.Fatal("expected signer signature to be populated")
+	}
+}
+
+func TestBuildChargeTransactionSOLWithExternalIDMemo(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	signer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+
+	payload, err := BuildChargeTransaction(context.Background(), signer, rpcClient, "1000", "sol", recipient, protocol.MethodDetails{}, BuildOptions{ExternalID: "order-123"})
+	if err != nil {
+		t.Fatalf("build failed: %v", err)
+	}
+	tx, err := solanautil.DecodeTransactionBase64(payload.Transaction)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if !hasMemoText(memoTexts(t, tx), "order-123") {
+		t.Fatalf("expected externalId memo instruction")
+	}
+}
+
+func TestBuildChargeTransactionRejectsLongExternalIDMemo(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	signer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+
+	_, err := BuildChargeTransaction(context.Background(), signer, rpcClient, "1000", "sol", recipient, protocol.MethodDetails{}, BuildOptions{ExternalID: strings.Repeat("x", 567)})
+	if err == nil {
+		t.Fatal("expected long externalId memo to fail")
 	}
 }
 
@@ -99,6 +150,29 @@ func TestBuildChargeTransactionTokenPull(t *testing.T) {
 	}
 }
 
+func TestBuildChargeTransactionTokenWithExternalIDMemo(t *testing.T) {
+	rpcClient := testutil.NewFakeRPC()
+	signer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey().String()
+	mint := testutil.NewPrivateKey().PublicKey()
+	rpcClient.MintOwners[mint.String()] = solana.TokenProgramID
+	decimals := uint8(6)
+
+	payload, err := BuildChargeTransaction(context.Background(), signer, rpcClient, "1000", mint.String(), recipient, protocol.MethodDetails{
+		Decimals: &decimals,
+	}, BuildOptions{ExternalID: "order-123"})
+	if err != nil {
+		t.Fatalf("build failed: %v", err)
+	}
+	tx, err := solanautil.DecodeTransactionBase64(payload.Transaction)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if !hasMemoText(memoTexts(t, tx), "order-123") {
+		t.Fatalf("expected externalId memo instruction")
+	}
+}
+
 func TestBuildChargeTransactionSOLWithSplits(t *testing.T) {
 	rpcClient := testutil.NewFakeRPC()
 	signer := testutil.NewPrivateKey()
@@ -108,7 +182,7 @@ func TestBuildChargeTransactionSOLWithSplits(t *testing.T) {
 
 	payload, err := BuildChargeTransaction(context.Background(), signer, rpcClient, "1000", "sol", recipient, protocol.MethodDetails{
 		Splits: []protocol.Split{
-			{Recipient: split1, Amount: "100"},
+			{Recipient: split1, Amount: "100", Memo: "platform fee"},
 			{Recipient: split2, Amount: "200"},
 		},
 	}, BuildOptions{})
@@ -119,9 +193,12 @@ func TestBuildChargeTransactionSOLWithSplits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
-	// 2 compute budget + 1 primary + 2 splits = 5
-	if len(tx.Message.Instructions) != 5 {
-		t.Fatalf("expected 5 instructions, got %d", len(tx.Message.Instructions))
+	// 2 compute budget + 1 primary + 2 splits + 1 split memo = 6
+	if len(tx.Message.Instructions) != 6 {
+		t.Fatalf("expected 6 instructions, got %d", len(tx.Message.Instructions))
+	}
+	if !hasMemoText(memoTexts(t, tx), "platform fee") {
+		t.Fatalf("expected split memo instruction")
 	}
 }
 
@@ -206,7 +283,7 @@ func TestBuildChargeTransactionTokenWithSplits(t *testing.T) {
 
 	payload, err := BuildChargeTransaction(context.Background(), signer, rpcClient, "1000", mint.String(), recipient, protocol.MethodDetails{
 		Decimals: &decimals,
-		Splits:   []protocol.Split{{Recipient: splitRecipient, Amount: "200"}},
+		Splits:   []protocol.Split{{Recipient: splitRecipient, Amount: "200", Memo: "platform fee"}},
 	}, BuildOptions{})
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
@@ -215,9 +292,12 @@ func TestBuildChargeTransactionTokenWithSplits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
-	// 2 compute budget + 2 (create ATA + transfer) for primary + 2 for split = 6
-	if len(tx.Message.Instructions) != 6 {
-		t.Fatalf("expected 6 instructions, got %d", len(tx.Message.Instructions))
+	// 2 compute budget + 2 (create ATA + transfer) for primary + 2 for split + 1 split memo = 7
+	if len(tx.Message.Instructions) != 7 {
+		t.Fatalf("expected 7 instructions, got %d", len(tx.Message.Instructions))
+	}
+	if !hasMemoText(memoTexts(t, tx), "platform fee") {
+		t.Fatalf("expected split memo instruction")
 	}
 }
 

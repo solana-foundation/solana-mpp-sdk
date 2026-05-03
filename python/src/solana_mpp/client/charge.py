@@ -11,6 +11,7 @@ from solana_mpp._types import PaymentChallenge, PaymentCredential
 from solana_mpp.protocol.intents import ChargeRequest
 from solana_mpp.protocol.solana import (
     CredentialPayload,
+    MEMO_PROGRAM,
     MethodDetails,
     is_native_sol,
 )
@@ -46,6 +47,7 @@ async def build_credential_header(
         amount=request.amount,
         currency=request.currency,
         recipient=request.recipient,
+        external_id=request.external_id,
         method_details=details,
     )
 
@@ -64,6 +66,7 @@ async def build_charge_transaction(
     currency: str,
     recipient: str,
     method_details: MethodDetails | None = None,
+    external_id: str = "",
 ) -> CredentialPayload:
     """Build a Solana transaction for a charge intent.
 
@@ -76,6 +79,7 @@ async def build_charge_transaction(
         amount: Amount in base units.
         currency: Currency symbol or mint address.
         recipient: Recipient public key (base58).
+        external_id: Optional root payment memo requested by the server.
         method_details: Optional Solana-specific method details.
 
     Returns:
@@ -83,6 +87,7 @@ async def build_charge_transaction(
     """
     # Lazy imports so the module can be imported without solana/solders installed
     from solders.hash import Hash  # type: ignore[import-untyped]
+    from solders.instruction import Instruction  # type: ignore[import-untyped]
     from solders.message import Message  # type: ignore[import-untyped]
     from solders.pubkey import Pubkey  # type: ignore[import-untyped]
     from solders.system_program import TransferParams, transfer  # type: ignore[import-untyped]
@@ -90,9 +95,22 @@ async def build_charge_transaction(
 
     details = method_details or MethodDetails()
     amount_int = int(amount)
+    split_total = sum(int(split.amount) for split in details.splits)
+    primary_amount = amount_int - split_total
+    if primary_amount <= 0:
+        raise ValueError("splits consume the entire amount")
     recipient_key = Pubkey.from_string(recipient)
 
     instructions = []
+    memo_program = Pubkey.from_string(MEMO_PROGRAM)
+
+    def append_memo(memo: str) -> None:
+        if not memo:
+            return
+        data = memo.encode("utf-8")
+        if len(data) > 566:
+            raise ValueError("memo cannot exceed 566 bytes")
+        instructions.append(Instruction(memo_program, data, []))
 
     if is_native_sol(currency):
         # SOL transfer
@@ -100,10 +118,11 @@ async def build_charge_transaction(
             TransferParams(
                 from_pubkey=signer.pubkey(),
                 to_pubkey=recipient_key,
-                lamports=amount_int,
+                lamports=primary_amount,
             )
         )
         instructions.append(ix)
+        append_memo(external_id)
 
         # Add split transfers
         for split in details.splits:
@@ -117,6 +136,7 @@ async def build_charge_transaction(
                 )
             )
             instructions.append(split_ix)
+            append_memo(split.memo)
     else:
         # SPL token transfer -- requires more complex instruction building
         # This is a simplified version; full implementation would handle

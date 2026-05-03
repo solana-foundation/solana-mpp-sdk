@@ -1,6 +1,7 @@
 local t = require('tests.test_helper')
 local verify = require('mpp.server.solana_verify')
 local mpp = require('mpp')
+local MEMO_PROGRAM = mpp.protocol.solana.MEMO_PROGRAM
 
 local function signature_context(overrides)
   local base = {
@@ -48,6 +49,147 @@ t.test('signature verifier succeeds for native SOL transfer', function()
     end,
   })
   t.assert_equal(result.reference, 'sig-123')
+end)
+
+t.test('signature verifier succeeds with externalId memo', function()
+  local result = verify.verify_signature(signature_context({
+    request = {
+      amount = '1000',
+      currency = 'sol',
+      externalId = 'order-123',
+      recipient = 'recipient-1',
+      methodDetails = {},
+    },
+    method_details = {},
+  }), {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-1', lamports = '1000' } } },
+              { program = 'spl-memo', parsed = 'order-123' },
+            },
+          },
+        },
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+end)
+
+t.test('signature verifier accepts memo parsed as info.memo', function()
+  local result = verify.verify_signature(signature_context({
+    request = {
+      amount = '1000',
+      currency = 'sol',
+      externalId = 'order-123',
+      recipient = 'recipient-1',
+      methodDetails = {},
+    },
+    method_details = {},
+  }), {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-1', lamports = '1000' } } },
+              { programId = MEMO_PROGRAM, parsed = { info = { memo = 'order-123' } } },
+            },
+          },
+        },
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+end)
+
+t.test('signature verifier accepts split memo', function()
+  local context = signature_context({
+    request = {
+      amount = '1000',
+      currency = 'sol',
+      recipient = 'recipient-1',
+      methodDetails = {
+        splits = {
+          { recipient = 'recipient-2', amount = '200', memo = 'platform fee' },
+        },
+      },
+    },
+    method_details = {
+      splits = {
+        { recipient = 'recipient-2', amount = '200', memo = 'platform fee' },
+      },
+    },
+  })
+  local result = verify.verify_signature(context, {
+    fetch_transaction = function()
+      return {
+        meta = { err = nil },
+        transaction = {
+          message = {
+            instructions = {
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-1', lamports = '800' } } },
+              { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-2', lamports = '200' } } },
+              { programId = MEMO_PROGRAM, parsed = { info = { data = 'platform fee' } } },
+            },
+          },
+        },
+      }
+    end,
+  })
+  t.assert_equal(result.reference, 'sig-123')
+end)
+
+t.test('signature verifier rejects missing externalId memo', function()
+  t.assert_error(function()
+    verify.verify_signature(signature_context({
+      request = {
+        amount = '1000',
+        currency = 'sol',
+        externalId = 'order-123',
+        recipient = 'recipient-1',
+        methodDetails = {},
+      },
+      method_details = {},
+    }), {
+      fetch_transaction = function()
+        return {
+          meta = { err = nil },
+          transaction = {
+            message = {
+              instructions = {
+                { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-1', lamports = '1000' } } },
+              },
+            },
+          },
+        }
+      end,
+    })
+  end, 'No memo instruction found for externalId memo')
+end)
+
+t.test('signature verifier rejects unexpected memo', function()
+  t.assert_error(function()
+    verify.verify_signature(signature_context(), {
+      fetch_transaction = function()
+        return {
+          meta = { err = nil },
+          transaction = {
+            message = {
+              instructions = {
+                { program = 'system', parsed = { type = 'transfer', info = { destination = 'recipient-1', lamports = '1000' } } },
+                { program = 'spl-memo', parsed = 'unexpected' },
+              },
+            },
+          },
+        }
+      end,
+    })
+  end, 'unexpected Memo Program instruction')
 end)
 
 t.test('transaction verifier broadcasts and verifies confirmed transfer', function()

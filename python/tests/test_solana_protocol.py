@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from solana_mpp.protocol.solana import (
     ASSOCIATED_TOKEN_PROGRAM,
+    MEMO_PROGRAM,
     SYSTEM_PROGRAM,
     TOKEN_2022_PROGRAM,
     TOKEN_PROGRAM,
@@ -163,3 +164,6 @@ class TestConstants:
 
     def test_associated_token_program(self):
         assert ASSOCIATED_TOKEN_PROGRAM.startswith("AToken")
+
+    def test_memo_program(self):
+        assert MEMO_PROGRAM.startswith("Memo")

@@ -7,6 +7,7 @@ const (
 	Token2022Program       = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 	AssociatedTokenProgram = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 	SystemProgram          = "11111111111111111111111111111111"
+	MemoProgram            = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
 
 	USDCMainnetMint  = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 	USDCDevnetMint   = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"

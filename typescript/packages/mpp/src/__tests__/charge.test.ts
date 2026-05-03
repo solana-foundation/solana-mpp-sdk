@@ -68,6 +68,7 @@ function signatureCredential(
         currency?: string;
         recipient?: string;
         decimals?: number;
+        externalId?: string;
         tokenProgram?: string;
         feePayer?: boolean;
         feePayerKey?: string;
@@ -82,6 +83,7 @@ function signatureCredential(
             request: {
                 amount: overrides.amount ?? '1000000',
                 currency: curr,
+                ...(overrides.externalId ? { externalId: overrides.externalId } : {}),
                 recipient: overrides.recipient ?? RECIPIENT,
                 methodDetails: {
                     network: 'devnet',
@@ -108,6 +110,7 @@ function transactionCredential(
         currency?: string;
         recipient?: string;
         decimals?: number;
+        externalId?: string;
         tokenProgram?: string;
         feePayer?: boolean;
         feePayerKey?: string;
@@ -122,6 +125,7 @@ function transactionCredential(
             request: {
                 amount: overrides.amount ?? '1000000',
                 currency: curr,
+                ...(overrides.externalId ? { externalId: overrides.externalId } : {}),
                 recipient: overrides.recipient ?? RECIPIENT,
                 methodDetails: {
                     network: 'devnet',
@@ -143,7 +147,7 @@ function transactionCredential(
 async function buildSolPaymentTxBase64(
     destination: string,
     lamports: string | number,
-    options: { splits?: Array<{ recipient: string; amount: string; memo?: string }> } = {},
+    options: { externalId?: string; splits?: Array<{ recipient: string; amount: string; memo?: string }> } = {},
 ) {
     const payer = await generateKeyPairSigner();
     const instructions: Instruction[] = [
@@ -153,6 +157,9 @@ async function buildSolPaymentTxBase64(
             amount: BigInt(lamports),
         }),
     ];
+    if (options.externalId) {
+        instructions.push(memoInstruction(options.externalId));
+    }
 
     for (const split of options.splits ?? []) {
         instructions.push(
@@ -185,6 +192,7 @@ async function buildSplPaymentTxBase64(
     tokenProgram = TOKEN_PROGRAM,
     options: {
         extraAtaOwners?: string[];
+        externalId?: string;
         feePayerKey?: string;
         skipAtaCreationFor?: string[];
         splits?: Array<{ recipient: string; amount: string; ataCreationRequired?: boolean; memo?: string }>;
@@ -220,6 +228,9 @@ async function buildSplPaymentTxBase64(
             { programAddress: tokenProgramAddress },
         ),
     );
+    if (options.externalId) {
+        instructions.push(memoInstruction(options.externalId));
+    }
 
     for (const split of options.splits ?? []) {
         const splitOwner = address(split.recipient);
@@ -312,6 +323,17 @@ function memoInstruction(memo: string): Instruction {
         data: new TextEncoder().encode(memo),
         programAddress: address(MEMO_PROGRAM),
     };
+}
+
+function decodeMemoInstructions(transaction: string): readonly TestCompiledInstruction[] {
+    const txBytes = getBase64Codec().encode(transaction);
+    const decoded = getTransactionDecoder().decode(txBytes);
+    const message = getCompiledTransactionMessageDecoder().decode(
+        decoded.messageBytes,
+    ) as unknown as TestCompiledMessage;
+    return message.instructions.filter(
+        ix => message.staticAccounts[ix.programAddressIndex].toString() === MEMO_PROGRAM,
+    );
 }
 
 // ── RPC response builders ──
@@ -653,6 +675,68 @@ test('client: includes memo instructions for memo-bearing SPL splits', async () 
     expect(new TextDecoder().decode(memoInstruction!.data)).toBe('platform fee');
 });
 
+test('client: includes externalId memo instruction for root SOL payment', async () => {
+    const signer = await generateKeyPairSigner();
+    const transaction = await buildChargeTransaction({
+        signer,
+        request: {
+            amount: '1000000',
+            currency: 'sol',
+            externalId: 'order-123',
+            recipient: RECIPIENT,
+            methodDetails: {
+                network: 'devnet',
+                recentBlockhash: BLOCKHASH,
+            },
+        },
+    });
+
+    const memoTexts = decodeMemoInstructions(transaction).map(ix => new TextDecoder().decode(ix.data));
+    expect(memoTexts).toContain('order-123');
+});
+
+test('client: includes externalId memo instruction for root SPL payment', async () => {
+    const signer = await generateKeyPairSigner();
+    const transaction = await buildChargeTransaction({
+        signer,
+        request: {
+            amount: '1000000',
+            currency: USDC_MINT,
+            externalId: 'order-123',
+            recipient: RECIPIENT,
+            methodDetails: {
+                decimals: 6,
+                network: 'devnet',
+                recentBlockhash: BLOCKHASH,
+                tokenProgram: TOKEN_PROGRAM,
+            },
+        },
+    });
+
+    const memoTexts = decodeMemoInstructions(transaction).map(ix => new TextDecoder().decode(ix.data));
+    expect(memoTexts).toContain('order-123');
+});
+
+test('client: rejects externalId memos above the SPL Memo byte limit', async () => {
+    const signer = await generateKeyPairSigner();
+
+    await expect(
+        buildChargeTransaction({
+            signer,
+            request: {
+                amount: '1000000',
+                currency: 'sol',
+                externalId: 'x'.repeat(567),
+                recipient: RECIPIENT,
+                methodDetails: {
+                    network: 'devnet',
+                    recentBlockhash: BLOCKHASH,
+                },
+            },
+        }),
+    ).rejects.toThrow(/memo cannot exceed 566 bytes/);
+});
+
 test('client: rejects split memos above the SPL Memo byte limit', async () => {
     const signer = await generateKeyPairSigner();
 
@@ -671,6 +755,109 @@ test('client: rejects split memos above the SPL Memo byte limit', async () => {
             },
         }),
     ).rejects.toThrow(/memo cannot exceed 566 bytes/);
+});
+
+test('signature: accepts SOL externalId memo when requested', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    globalThis.fetch = async () =>
+        rpcSuccess(
+            txWithInstructions([
+                {
+                    program: 'system',
+                    parsed: { type: 'transfer', info: { destination: RECIPIENT, lamports: 1000000 } },
+                },
+                memoIx('order-123'),
+            ]),
+        );
+
+    const receipt = await method.verify({
+        credential: signatureCredential(SIGNATURE, { amount: '1000000', externalId: 'order-123' }),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
+    expect(receipt.externalId).toBe('order-123');
+});
+
+test.each([
+    ['memo', memoInfoIx('memo', 'order-123')],
+    ['data', memoInfoIx('data', 'order-123')],
+])('signature: accepts SOL externalId memo parsed as info.%s', async (_field, memoInstruction) => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    globalThis.fetch = async () =>
+        rpcSuccess(
+            txWithInstructions([
+                {
+                    program: 'system',
+                    parsed: { type: 'transfer', info: { destination: RECIPIENT, lamports: 1000000 } },
+                },
+                memoInstruction,
+            ]),
+        );
+
+    const receipt = await method.verify({
+        credential: signatureCredential(SIGNATURE, { amount: '1000000', externalId: 'order-123' }),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
+});
+
+test('signature: rejects SOL externalId memo when missing', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    globalThis.fetch = async () => rpcSuccess(solTransferTx(RECIPIENT, 1000000));
+
+    await expect(
+        method.verify({
+            credential: signatureCredential(SIGNATURE, { amount: '1000000', externalId: 'order-123' }),
+            request: {} as any,
+        }),
+    ).rejects.toThrow(/No memo instruction found for externalId memo/);
+});
+
+test('signature: rejects SOL externalId memo when wrong', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    globalThis.fetch = async () =>
+        rpcSuccess(
+            txWithInstructions([
+                {
+                    program: 'system',
+                    parsed: { type: 'transfer', info: { destination: RECIPIENT, lamports: 1000000 } },
+                },
+                memoIx('wrong order'),
+            ]),
+        );
+
+    await expect(
+        method.verify({
+            credential: signatureCredential(SIGNATURE, { amount: '1000000', externalId: 'order-123' }),
+            request: {} as any,
+        }),
+    ).rejects.toThrow(/No memo instruction found for externalId memo/);
 });
 
 test('signature: accepts SOL split memo when requested', async () => {
@@ -873,6 +1060,70 @@ test('signature: accepts valid SPL token transfer', async () => {
 
     expect(receipt.status).toBe('success');
     expect(receipt.reference).toBe(SIGNATURE);
+});
+
+test('signature: accepts SPL externalId memo when requested', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        currency: USDC_MINT,
+        decimals: 6,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    const [expectedAta] = await findAssociatedTokenPda({
+        owner: address(RECIPIENT),
+        mint: address(USDC_MINT),
+        tokenProgram: address(TOKEN_PROGRAM),
+    });
+
+    globalThis.fetch = async () =>
+        rpcSuccess(txWithInstructions([splTransferIx(expectedAta, USDC_MINT, '1000000'), memoIx('order-123')]));
+
+    const receipt = await method.verify({
+        credential: signatureCredential(SIGNATURE, {
+            amount: '1000000',
+            currency: USDC_MINT,
+            decimals: 6,
+            externalId: 'order-123',
+        }),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
+    expect(receipt.externalId).toBe('order-123');
+});
+
+test('signature: rejects SPL externalId memo when missing', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        currency: USDC_MINT,
+        decimals: 6,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    const [expectedAta] = await findAssociatedTokenPda({
+        owner: address(RECIPIENT),
+        mint: address(USDC_MINT),
+        tokenProgram: address(TOKEN_PROGRAM),
+    });
+
+    globalThis.fetch = async () => rpcSuccess(splTransferTx(expectedAta, USDC_MINT, '1000000'));
+
+    await expect(
+        method.verify({
+            credential: signatureCredential(SIGNATURE, {
+                amount: '1000000',
+                currency: USDC_MINT,
+                decimals: 6,
+                externalId: 'order-123',
+            }),
+            request: {} as any,
+        }),
+    ).rejects.toThrow(/No memo instruction found for externalId memo/);
 });
 
 test('signature: accepts SPL split memo when requested', async () => {
@@ -1443,6 +1694,57 @@ test('pull: accepts valid native SOL transfer', async () => {
     expect(receipt.reference).toBe(SIGNATURE);
 });
 
+test('pull: accepts native SOL externalId memo pre-broadcast and on-chain', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    mockServerBroadcastFetch(
+        txWithInstructions([
+            { program: 'system', parsed: { type: 'transfer', info: { destination: RECIPIENT, lamports: 1000000 } } },
+            memoIx('order-123'),
+        ]),
+    );
+
+    const receipt = await method.verify({
+        credential: transactionCredential(
+            await buildSolPaymentTxBase64(RECIPIENT, 1000000, { externalId: 'order-123' }),
+            {
+                amount: '1000000',
+                externalId: 'order-123',
+            },
+        ),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
+    expect(receipt.externalId).toBe('order-123');
+});
+
+test('pull: rejects native SOL externalId memo when missing pre-broadcast', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    mockServerBroadcastFetch(txWithInstructions([]));
+
+    await expect(
+        method.verify({
+            credential: transactionCredential(await buildSolPaymentTxBase64(RECIPIENT, 1000000), {
+                amount: '1000000',
+                externalId: 'order-123',
+            }),
+            request: {} as any,
+        }),
+    ).rejects.toThrow(/No memo instruction found for externalId memo/);
+});
+
 test('pull: accepts native SOL split memo pre-broadcast and on-chain', async () => {
     const splits = [{ recipient: PLATFORM, amount: '50000', memo: 'platform fee' }];
     const method = charge({
@@ -1526,6 +1828,70 @@ test('pull: accepts valid SPL token transfer', async () => {
 
     expect(receipt.status).toBe('success');
     expect(receipt.reference).toBe(SIGNATURE);
+});
+
+test('pull: accepts SPL externalId memo pre-broadcast and on-chain', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        currency: USDC_MINT,
+        decimals: 6,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    const [expectedAta] = await findAssociatedTokenPda({
+        owner: address(RECIPIENT),
+        mint: address(USDC_MINT),
+        tokenProgram: address(TOKEN_PROGRAM),
+    });
+
+    mockServerBroadcastFetch(
+        txWithInstructions([splTransferIx(expectedAta, USDC_MINT, '1000000'), memoIx('order-123')]),
+    );
+
+    const receipt = await method.verify({
+        credential: transactionCredential(
+            await buildSplPaymentTxBase64(RECIPIENT, USDC_MINT, '1000000', 6, TOKEN_PROGRAM, {
+                externalId: 'order-123',
+            }),
+            {
+                amount: '1000000',
+                currency: USDC_MINT,
+                decimals: 6,
+                externalId: 'order-123',
+            },
+        ),
+        request: {} as any,
+    });
+
+    expect(receipt.status).toBe('success');
+    expect(receipt.externalId).toBe('order-123');
+});
+
+test('pull: rejects SPL externalId memo when missing pre-broadcast', async () => {
+    const method = charge({
+        recipient: RECIPIENT,
+        currency: USDC_MINT,
+        decimals: 6,
+        network: 'devnet',
+        rpcUrl: 'https://mock-rpc',
+        store,
+    });
+
+    mockServerBroadcastFetch(txWithInstructions([]));
+
+    await expect(
+        method.verify({
+            credential: transactionCredential(await buildSplPaymentTxBase64(RECIPIENT, USDC_MINT, '1000000'), {
+                amount: '1000000',
+                currency: USDC_MINT,
+                decimals: 6,
+                externalId: 'order-123',
+            }),
+            request: {} as any,
+        }),
+    ).rejects.toThrow(/No memo instruction found for externalId memo/);
 });
 
 test('pull: accepts SPL split memo pre-broadcast and on-chain', async () => {

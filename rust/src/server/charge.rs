@@ -779,7 +779,12 @@ impl Mpp {
             }
             let matched = verify_sol_transfers(&instructions, recipient, primary_amount, splits)?;
             let mut matched = matched;
-            verify_parsed_memo_instructions(&instructions, splits, &mut matched)?;
+            verify_parsed_memo_instructions(
+                &instructions,
+                request.external_id.as_deref(),
+                splits,
+                &mut matched,
+            )?;
             validate_parsed_instruction_allowlist(
                 &instructions,
                 &matched,
@@ -812,7 +817,12 @@ impl Mpp {
                 splits,
                 Some(expected_token_program),
             )?;
-            verify_parsed_memo_instructions(&instructions, splits, &mut matched)?;
+            verify_parsed_memo_instructions(
+                &instructions,
+                request.external_id.as_deref(),
+                splits,
+                &mut matched,
+            )?;
             validate_parsed_instruction_allowlist(
                 &instructions,
                 &matched,
@@ -980,7 +990,13 @@ fn verify_versioned_transaction_pre_broadcast(
                 &mut matched_instruction_indexes,
             )?;
         }
-        verify_memo_instructions(tx, account_keys, splits, &mut matched_instruction_indexes)?;
+        verify_memo_instructions(
+            tx,
+            account_keys,
+            request.external_id.as_deref(),
+            splits,
+            &mut matched_instruction_indexes,
+        )?;
         validate_instruction_allowlist(
             tx,
             account_keys,
@@ -1032,7 +1048,13 @@ fn verify_versioned_transaction_pre_broadcast(
                 &mut matched_instruction_indexes,
             )?;
         }
-        verify_memo_instructions(tx, account_keys, splits, &mut matched_instruction_indexes)?;
+        verify_memo_instructions(
+            tx,
+            account_keys,
+            request.external_id.as_deref(),
+            splits,
+            &mut matched_instruction_indexes,
+        )?;
         validate_instruction_allowlist(
             tx,
             account_keys,
@@ -1410,14 +1432,12 @@ fn verify_sol_transfer_instructions(
 fn verify_memo_instructions(
     tx: &VersionedTransaction,
     account_keys: &[Pubkey],
+    external_id: Option<&str>,
     splits: &[Split],
     matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
     let memo_program = Pubkey::from_str(programs::MEMO_PROGRAM).unwrap();
-    for split in splits {
-        let Some(memo) = split.memo.as_deref() else {
-            continue;
-        };
+    for (label, memo) in expected_memos(external_id, splits) {
         let expected_data = memo.as_bytes();
         if expected_data.len() > 566 {
             return Err(VerificationError::invalid_payload(
@@ -1441,7 +1461,7 @@ fn verify_memo_instructions(
         }
         if !found {
             return Err(VerificationError::invalid_payload(format!(
-                "No memo instruction found for split memo \"{memo}\""
+                "No memo instruction found for {label} memo \"{memo}\""
             )));
         }
     }
@@ -1825,13 +1845,11 @@ fn parsed_program_id(ix: &serde_json::Value) -> Option<&str> {
 
 fn verify_parsed_memo_instructions(
     instructions: &[serde_json::Value],
+    external_id: Option<&str>,
     splits: &[Split],
     matched_instruction_indexes: &mut HashSet<usize>,
 ) -> Result<(), VerificationError> {
-    for split in splits {
-        let Some(memo) = split.memo.as_deref() else {
-            continue;
-        };
+    for (label, memo) in expected_memos(external_id, splits) {
         if memo.as_bytes().len() > 566 {
             return Err(VerificationError::invalid_payload(
                 "memo cannot exceed 566 bytes",
@@ -1854,11 +1872,27 @@ fn verify_parsed_memo_instructions(
         }
         if !found {
             return Err(VerificationError::invalid_payload(format!(
-                "No memo instruction found for split memo \"{memo}\""
+                "No memo instruction found for {label} memo \"{memo}\""
             )));
         }
     }
     Ok(())
+}
+
+fn expected_memos<'a>(
+    external_id: Option<&'a str>,
+    splits: &'a [Split],
+) -> Vec<(&'static str, &'a str)> {
+    let mut memos = Vec::new();
+    if let Some(external_id) = external_id.filter(|value| !value.is_empty()) {
+        memos.push(("externalId", external_id));
+    }
+    for split in splits {
+        if let Some(memo) = split.memo.as_deref().filter(|value| !value.is_empty()) {
+            memos.push(("split", memo));
+        }
+    }
+    memos
 }
 
 fn parsed_memo_text(ix: &serde_json::Value) -> Option<&str> {
@@ -4175,7 +4209,7 @@ mod tests {
         ];
         let mut matched = HashSet::new();
 
-        verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap();
+        verify_parsed_memo_instructions(&instructions, None, &splits, &mut matched).unwrap();
 
         assert_eq!(matched, HashSet::from([0, 1]));
     }
@@ -4199,9 +4233,61 @@ mod tests {
         }];
         let mut matched = HashSet::new();
 
-        verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap();
+        verify_parsed_memo_instructions(&instructions, None, &splits, &mut matched).unwrap();
 
         assert_eq!(matched, HashSet::from([0]));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_accepts_external_id() {
+        let instructions = vec![parsed_memo_ix("order-123")];
+        let splits = vec![];
+        let mut matched = HashSet::new();
+
+        verify_parsed_memo_instructions(&instructions, Some("order-123"), &splits, &mut matched)
+            .unwrap();
+
+        assert_eq!(matched, HashSet::from([0]));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_rejects_missing_external_id() {
+        let instructions = vec![parsed_memo_ix("wrong order")];
+        let splits = vec![];
+        let mut matched = HashSet::new();
+
+        let err = verify_parsed_memo_instructions(
+            &instructions,
+            Some("order-123"),
+            &splits,
+            &mut matched,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .message
+            .contains("No memo instruction found for externalId memo"));
+    }
+
+    #[test]
+    fn verify_parsed_memo_instructions_requires_distinct_external_id_and_split_memos() {
+        let instructions = vec![parsed_memo_ix("same")];
+        let splits = vec![Split {
+            recipient: "PlatformRecipient".to_string(),
+            amount: "50000".to_string(),
+            ata_creation_required: None,
+            label: None,
+            memo: Some("same".to_string()),
+        }];
+        let mut matched = HashSet::new();
+
+        let err =
+            verify_parsed_memo_instructions(&instructions, Some("same"), &splits, &mut matched)
+                .unwrap_err();
+
+        assert!(err
+            .message
+            .contains("No memo instruction found for split memo"));
     }
 
     #[test]
@@ -4216,8 +4302,8 @@ mod tests {
         }];
         let mut matched = HashSet::new();
 
-        let err =
-            verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap_err();
+        let err = verify_parsed_memo_instructions(&instructions, None, &splits, &mut matched)
+            .unwrap_err();
 
         assert!(err.message.contains("No memo instruction found"));
     }
@@ -4243,8 +4329,8 @@ mod tests {
         ];
         let mut matched = HashSet::new();
 
-        let err =
-            verify_parsed_memo_instructions(&instructions, &splits, &mut matched).unwrap_err();
+        let err = verify_parsed_memo_instructions(&instructions, None, &splits, &mut matched)
+            .unwrap_err();
 
         assert!(err.message.contains("No memo instruction found"));
     }

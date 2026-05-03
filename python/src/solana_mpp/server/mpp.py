@@ -19,6 +19,7 @@ from solana_mpp._types import PaymentChallenge, PaymentCredential, Receipt
 from solana_mpp.protocol.intents import ChargeRequest, parse_units
 from solana_mpp.protocol.solana import (
     CredentialPayload,
+    MEMO_PROGRAM,
     MethodDetails,
     default_rpc_url,
     default_token_program_for_currency,
@@ -52,7 +53,11 @@ def _build_expected_transfers(request: ChargeRequest, details: MethodDetails) ->
     return expected
 
 
-def _verify_parsed_sol_transfers(instructions: list[dict[str, Any]], request: ChargeRequest, details: MethodDetails) -> None:
+def _verify_parsed_sol_transfers(
+    instructions: list[dict[str, Any]],
+    request: ChargeRequest,
+    details: MethodDetails,
+) -> None:
     expected = _build_expected_transfers(request, details)
     transfers = [
         instruction
@@ -128,6 +133,70 @@ def _verify_ata_owner(ata_address: str, expected_owner: str, mint: str, token_pr
         return str(expected_ata) == ata_address
     except Exception:
         return False
+
+
+def _parsed_program_id(instruction: dict[str, Any]) -> str:
+    program_id = instruction.get("programId") or instruction.get("program_id")
+    if isinstance(program_id, str):
+        return program_id
+    if instruction.get("program") == "spl-memo":
+        return MEMO_PROGRAM
+    return ""
+
+
+def _parsed_memo_text(instruction: dict[str, Any]) -> str | None:
+    parsed = instruction.get("parsed")
+    if isinstance(parsed, str):
+        return parsed
+    if isinstance(parsed, dict):
+        info = parsed.get("info")
+        if isinstance(info, dict):
+            memo = info.get("memo")
+            if isinstance(memo, str):
+                return memo
+            data = info.get("data")
+            if isinstance(data, str):
+                return data
+    return None
+
+
+def _expected_memos(request: ChargeRequest, details: MethodDetails) -> list[tuple[str, str]]:
+    expected: list[tuple[str, str]] = []
+    if request.external_id:
+        expected.append(("externalId", request.external_id))
+    for split in details.splits:
+        if split.memo:
+            expected.append(("split", split.memo))
+    return expected
+
+
+def _verify_parsed_memo_instructions(
+    instructions: list[dict[str, Any]],
+    request: ChargeRequest,
+    details: MethodDetails,
+) -> None:
+    matched: set[int] = set()
+    for label, memo in _expected_memos(request, details):
+        if len(memo.encode("utf-8")) > 566:
+            raise PaymentError("memo cannot exceed 566 bytes", code="invalid-payload")
+
+        match_index = next(
+            (
+                index
+                for index, instruction in enumerate(instructions)
+                if index not in matched
+                and _parsed_program_id(instruction) == MEMO_PROGRAM
+                and _parsed_memo_text(instruction) == memo
+            ),
+            -1,
+        )
+        if match_index == -1:
+            raise PaymentError(f'No memo instruction found for {label} memo "{memo}"', code="invalid-payload")
+        matched.add(match_index)
+
+    for index, instruction in enumerate(instructions):
+        if index not in matched and _parsed_program_id(instruction) == MEMO_PROGRAM:
+            raise PaymentError("unexpected Memo Program instruction in payment transaction", code="invalid-payload")
 
 
 def _rpc_value(response: Any) -> Any:
@@ -469,3 +538,4 @@ class Mpp:
             _verify_parsed_sol_transfers(instructions, request, details)
         else:
             _verify_parsed_spl_transfers(instructions, request, details)
+        _verify_parsed_memo_instructions(instructions, request, details)

@@ -329,16 +329,16 @@ func (m *Mpp) verifyOnChain(ctx context.Context, signature solana.Signature, req
 	if err != nil {
 		return err
 	}
-	return verifyTransfersAgainstChallenge(tx, amount, request.Currency, m.recipient, details)
+	return verifyTransfersAgainstChallenge(tx, amount, request.Currency, m.recipient, request.ExternalID, details)
 }
 
-func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, currency string, recipient solana.PublicKey, details protocol.MethodDetails) error {
+func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, currency string, recipient solana.PublicKey, externalID string, details protocol.MethodDetails) error {
 	expected, err := buildExpectedTransfers(amount, recipient, details)
 	if err != nil {
 		return err
 	}
+	matched := make([]bool, len(tx.Message.Instructions))
 	if isNativeSOL(currency) {
-		matched := make([]bool, len(tx.Message.Instructions))
 		for _, want := range expected {
 			found := false
 			for index, compiled := range tx.Message.Instructions {
@@ -371,7 +371,7 @@ func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, curr
 				return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching SOL transfer for %s", want.recipient))
 			}
 		}
-		return nil
+		return verifyMemoInstructions(tx, matched, externalID, details.Splits)
 	}
 	resolvedMint := protocol.ResolveMint(currency, details.Network)
 	mint := solana.MustPublicKeyFromBase58(resolvedMint)
@@ -400,7 +400,6 @@ func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, curr
 			amount:    want.amount,
 		})
 	}
-	matched := make([]bool, len(tx.Message.Instructions))
 	for _, want := range tokenExpected {
 		found := false
 		for index, compiled := range tx.Message.Instructions {
@@ -453,6 +452,62 @@ func verifyTransfersAgainstChallenge(tx *solana.Transaction, amount uint64, curr
 		}
 		if !found {
 			return mpp.NewError(mpp.ErrCodeNoTransfer, fmt.Sprintf("no matching token transfer for %s", want.recipient))
+		}
+	}
+	return verifyMemoInstructions(tx, matched, externalID, details.Splits)
+}
+
+type expectedMemo struct {
+	label string
+	value string
+}
+
+func buildExpectedMemos(externalID string, splits []protocol.Split) []expectedMemo {
+	expected := make([]expectedMemo, 0, 1+len(splits))
+	if externalID != "" {
+		expected = append(expected, expectedMemo{label: "externalId", value: externalID})
+	}
+	for _, split := range splits {
+		if split.Memo != "" {
+			expected = append(expected, expectedMemo{label: "split", value: split.Memo})
+		}
+	}
+	return expected
+}
+
+func verifyMemoInstructions(tx *solana.Transaction, matched []bool, externalID string, splits []protocol.Split) error {
+	memoProgram := solana.MustPublicKeyFromBase58(protocol.MemoProgram)
+	for _, want := range buildExpectedMemos(externalID, splits) {
+		if len([]byte(want.value)) > 566 {
+			return mpp.NewError(mpp.ErrCodeInvalidPayload, "memo cannot exceed 566 bytes")
+		}
+		found := false
+		for index, compiled := range tx.Message.Instructions {
+			if matched[index] {
+				continue
+			}
+			programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
+			if !programID.Equals(memoProgram) {
+				continue
+			}
+			if string(compiled.Data) == want.value {
+				matched[index] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return mpp.NewError(mpp.ErrCodeInvalidPayload, fmt.Sprintf("no memo instruction found for %s memo %q", want.label, want.value))
+		}
+	}
+
+	for index, compiled := range tx.Message.Instructions {
+		if matched[index] {
+			continue
+		}
+		programID := tx.Message.AccountKeys[compiled.ProgramIDIndex]
+		if programID.Equals(memoProgram) {
+			return mpp.NewError(mpp.ErrCodeInvalidPayload, "unexpected Memo Program instruction in payment transaction")
 		}
 	}
 	return nil

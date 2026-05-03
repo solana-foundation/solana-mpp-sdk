@@ -283,7 +283,7 @@ async function verifyBase64TransactionPreBroadcast(clientTxBase64: string, chall
                 matchedInstructionIndexes,
             );
         }
-        verifyMemoInstructionsPreBroadcast(message, splits, matchedInstructionIndexes);
+        verifyMemoInstructionsPreBroadcast(message, challenge.externalId, splits, matchedInstructionIndexes);
         await validateInstructionAllowlist(message, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
             expectedMint: undefined,
@@ -327,7 +327,7 @@ async function verifyBase64TransactionPreBroadcast(clientTxBase64: string, chall
             matchedInstructionIndexes,
         );
     }
-    verifyMemoInstructionsPreBroadcast(message, splits, matchedInstructionIndexes);
+    verifyMemoInstructionsPreBroadcast(message, challenge.externalId, splits, matchedInstructionIndexes);
     await validateInstructionAllowlist(message, matchedInstructionIndexes, {
         allowedAtaOwners: ataPolicy.allowedAtaOwners,
         expectedMint,
@@ -790,7 +790,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
                 matchedInstructionIndexes,
             );
         }
-        verifyMemoInstructions(instructions, splits, matchedInstructionIndexes);
+        verifyMemoInstructions(instructions, challenge.externalId, splits, matchedInstructionIndexes);
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
@@ -812,7 +812,7 @@ async function verifyInstructions(instructions: ParsedInstruction[], challenge: 
         for (const split of splits) {
             verifySolTransfer(instructions, split.recipient, split.amount, matchedInstructionIndexes);
         }
-        verifyMemoInstructions(instructions, splits, matchedInstructionIndexes);
+        verifyMemoInstructions(instructions, challenge.externalId, splits, matchedInstructionIndexes);
 
         await validateParsedInstructionAllowlist(instructions, matchedInstructionIndexes, {
             allowedAtaOwners: ataPolicy.allowedAtaOwners,
@@ -873,12 +873,12 @@ function verifySolTransfer(
 
 function verifyMemoInstructionsPreBroadcast(
     message: CompiledMessage,
+    externalId: string | undefined,
     splits: Array<{ memo?: string }>,
     matchedInstructionIndexes: Set<number>,
 ) {
-    for (const split of splits) {
-        if (!split.memo) continue;
-        const expectedData = new TextEncoder().encode(split.memo);
+    for (const expectedMemo of expectedMemoEntries(externalId, splits)) {
+        const expectedData = new TextEncoder().encode(expectedMemo.value);
         if (expectedData.byteLength > 566) {
             throw new Error('memo cannot exceed 566 bytes');
         }
@@ -894,19 +894,19 @@ function verifyMemoInstructionsPreBroadcast(
             }
         }
         if (!found) {
-            throw new Error(`No memo instruction found for split memo "${split.memo}"`);
+            throw new Error(`No memo instruction found for ${expectedMemo.label} memo "${expectedMemo.value}"`);
         }
     }
 }
 
 function verifyMemoInstructions(
     instructions: ParsedInstruction[],
+    externalId: string | undefined,
     splits: Array<{ memo?: string }>,
     matchedInstructionIndexes: Set<number>,
 ) {
-    for (const split of splits) {
-        if (!split.memo) continue;
-        if (new TextEncoder().encode(split.memo).byteLength > 566) {
+    for (const expectedMemo of expectedMemoEntries(externalId, splits)) {
+        if (new TextEncoder().encode(expectedMemo.value).byteLength > 566) {
             throw new Error('memo cannot exceed 566 bytes');
         }
 
@@ -914,16 +914,29 @@ function verifyMemoInstructions(
         for (const [index, ix] of instructions.entries()) {
             if (matchedInstructionIndexes.has(index)) continue;
             if (parsedProgramId(ix) !== MEMO_PROGRAM) continue;
-            if (parsedMemoText(ix) === split.memo) {
+            if (parsedMemoText(ix) === expectedMemo.value) {
                 matchedInstructionIndexes.add(index);
                 found = true;
                 break;
             }
         }
         if (!found) {
-            throw new Error(`No memo instruction found for split memo "${split.memo}"`);
+            throw new Error(`No memo instruction found for ${expectedMemo.label} memo "${expectedMemo.value}"`);
         }
     }
+}
+
+function expectedMemoEntries(externalId: string | undefined, splits: Array<{ memo?: string }>) {
+    const entries: Array<{ label: 'externalId' | 'split'; value: string }> = [];
+    if (externalId) {
+        entries.push({ label: 'externalId', value: externalId });
+    }
+    for (const split of splits) {
+        if (split.memo) {
+            entries.push({ label: 'split', value: split.memo });
+        }
+    }
+    return entries;
 }
 
 function parsedMemoText(ix: ParsedInstruction): string | undefined {

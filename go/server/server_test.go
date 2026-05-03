@@ -266,7 +266,7 @@ func TestVerifyTransfersAgainstChallengeDuplicateSOLSplitsRequireDistinctInstruc
 	}
 
 	tx := newTestTransaction(t, payer, primaryIx, splitIx)
-	err = verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, protocol.MethodDetails{
+	err = verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "", protocol.MethodDetails{
 		Splits: []protocol.Split{
 			{Recipient: splitRecipient.String(), Amount: "100"},
 			{Recipient: splitRecipient.String(), Amount: "100"},
@@ -291,10 +291,89 @@ func TestVerifyTransfersAgainstChallengeSameRecipientSOLSplitsMatchByAmount(t *t
 	}
 
 	tx := newTestTransaction(t, payer, primaryIx, splitIx)
-	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, protocol.MethodDetails{
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "", protocol.MethodDetails{
 		Splits: []protocol.Split{{Recipient: recipient.String(), Amount: "200"}},
 	}); err != nil {
 		t.Fatalf("expected same-recipient SOL transfers to pass: %v", err)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeAcceptsSOLExternalIDMemo(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 1000)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	memoIx, err := solanautil.BuildMemoInstruction("order-123")
+	if err != nil {
+		t.Fatalf("build memo failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, memoIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "order-123", protocol.MethodDetails{}); err != nil {
+		t.Fatalf("expected SOL externalId memo to pass: %v", err)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeRejectsMissingSOLExternalIDMemo(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 1000)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "order-123", protocol.MethodDetails{}); err == nil {
+		t.Fatal("expected missing SOL externalId memo to fail")
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeRejectsUnexpectedSOLMemo(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 1000)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	memoIx, err := solanautil.BuildMemoInstruction("unexpected")
+	if err != nil {
+		t.Fatalf("build memo failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, memoIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "", protocol.MethodDetails{}); err == nil {
+		t.Fatal("expected unexpected SOL memo to fail")
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeAcceptsSOLSplitMemo(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+	splitRecipient := testutil.NewPrivateKey().PublicKey()
+
+	primaryIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), recipient, 800)
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	splitIx, err := solanautil.BuildSOLTransfer(payer.PublicKey(), splitRecipient, 200)
+	if err != nil {
+		t.Fatalf("build split transfer failed: %v", err)
+	}
+	memoIx, err := solanautil.BuildMemoInstruction("platform fee")
+	if err != nil {
+		t.Fatalf("build memo failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, splitIx, memoIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, "sol", recipient, "", protocol.MethodDetails{
+		Splits: []protocol.Split{{Recipient: splitRecipient.String(), Amount: "200", Memo: "platform fee"}},
+	}); err != nil {
+		t.Fatalf("expected SOL split memo to pass: %v", err)
 	}
 }
 
@@ -338,10 +417,47 @@ func TestVerifyTransfersAgainstChallengeSameRecipientSPLSplitsMatchByAmount(t *t
 	}
 
 	tx := newTestTransaction(t, payer, primaryIx, splitIx)
-	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, protocol.MethodDetails{
+	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, "", protocol.MethodDetails{
 		Splits: []protocol.Split{{Recipient: recipient.String(), Amount: "200"}},
 	}); err != nil {
 		t.Fatalf("expected same-recipient SPL transfers to pass: %v", err)
+	}
+}
+
+func TestVerifyTransfersAgainstChallengeAcceptsSPLExternalIDMemo(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+	mint := testutil.NewPrivateKey().PublicKey()
+
+	sourceATA, err := solanautil.FindAssociatedTokenAddressWithProgram(payer.PublicKey(), mint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find source ata failed: %v", err)
+	}
+	recipientATA, err := solanautil.FindAssociatedTokenAddressWithProgram(recipient, mint, solana.TokenProgramID)
+	if err != nil {
+		t.Fatalf("find recipient ata failed: %v", err)
+	}
+
+	primaryIx, err := token.NewTransferCheckedInstruction(
+		1000,
+		6,
+		sourceATA,
+		mint,
+		recipientATA,
+		payer.PublicKey(),
+		nil,
+	).ValidateAndBuild()
+	if err != nil {
+		t.Fatalf("build primary transfer failed: %v", err)
+	}
+	memoIx, err := solanautil.BuildMemoInstruction("order-123")
+	if err != nil {
+		t.Fatalf("build memo failed: %v", err)
+	}
+
+	tx := newTestTransaction(t, payer, primaryIx, memoIx)
+	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, "order-123", protocol.MethodDetails{}); err != nil {
+		t.Fatalf("expected SPL externalId memo to pass: %v", err)
 	}
 }
 
@@ -374,7 +490,7 @@ func TestVerifyTransfersAgainstChallengeRejectsWrongSPLMint(t *testing.T) {
 	}
 
 	tx := newTestTransaction(t, payer, ix)
-	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, protocol.MethodDetails{}); err == nil {
+	if err := verifyTransfersAgainstChallenge(tx, 1000, mint.String(), recipient, "", protocol.MethodDetails{}); err == nil {
 		t.Fatal("expected wrong mint to fail")
 	}
 }

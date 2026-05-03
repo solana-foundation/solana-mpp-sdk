@@ -140,7 +140,7 @@ export async function buildChargeTransaction(
 ): Promise<Base64EncodedWireTransaction> {
     const {
         signer,
-        request: { amount, currency, recipient, methodDetails },
+        request: { amount, currency, externalId, recipient, methodDetails },
         onProgress,
     } = parameters;
     const {
@@ -267,6 +267,7 @@ export async function buildChargeTransaction(
 
         // Primary recipient ATA creation is intentionally out of scope.
         await addSplTransfer(recipient, primaryAmount, false);
+        addMemoInstruction(externalId);
 
         // Split transfers.
         for (const split of splits ?? []) {
@@ -287,6 +288,7 @@ export async function buildChargeTransaction(
                 source: signer,
             }),
         );
+        addMemoInstruction(externalId);
 
         // Split transfers.
         for (const split of splits ?? []) {
@@ -471,6 +473,7 @@ export declare namespace buildChargeTransaction {
         request: {
             amount: string;
             currency: string;
+            externalId?: string;
             methodDetails: {
                 decimals?: number;
                 feePayer?: boolean;

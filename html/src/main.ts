@@ -156,6 +156,7 @@ async function payWithWallet() {
   let instructions: Instruction[] = computeBudgetInstructions();
   if (isNativeSOL) {
     instructions.push(systemTransfer(walletPubkey, recipientPubkey, primaryAmount));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       instructions.push(systemTransfer(walletPubkey, bs58Decode(s.recipient), BigInt(s.amount)));
       appendMemoInstruction(instructions, s.memo);
@@ -166,6 +167,7 @@ async function payWithWallet() {
     const sourceAta = bs58Decode(await findATA(walletB58, mint!, tokenProg));
     const destAta = bs58Decode(await findATA(request.recipient, mint!, tokenProg));
     instructions.push(tokenTransferChecked(sourceAta, mintPubkey, destAta, walletPubkey, primaryAmount, decimals, tokenProg));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       const splitRecipient = bs58Decode(s.recipient);
       const splitAta = bs58Decode(await findATA(s.recipient, mint!, tokenProg));
@@ -279,6 +281,7 @@ async function payTestMode() {
   let instructions: Instruction[] = computeBudgetInstructions();
   if (isNativeSOL) {
     instructions.push(systemTransfer(publicKeyRaw, recipientPubkey, primaryAmount));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       instructions.push(systemTransfer(publicKeyRaw, bs58Decode(s.recipient), BigInt(s.amount)));
       appendMemoInstruction(instructions, s.memo);
@@ -289,6 +292,7 @@ async function payTestMode() {
     const sourceAta = bs58Decode(await findATA(publicKeyB58, mint!, tokenProg));
     const destAta = bs58Decode(await findATA(request.recipient, mint!, tokenProg));
     instructions.push(tokenTransferChecked(sourceAta, mintPubkey, destAta, publicKeyRaw, primaryAmount, decimals, tokenProg));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       const splitRecipient = bs58Decode(s.recipient);
       const splitAta = bs58Decode(await findATA(s.recipient, mint!, tokenProg));

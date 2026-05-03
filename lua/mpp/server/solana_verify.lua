@@ -5,8 +5,10 @@ local M = {}
 
 local TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 local TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
+local MEMO_PROGRAM = protocol.MEMO_PROGRAM
 local verify_sol_transfers
 local verify_spl_transfers
+local verify_memo_instructions
 
 local function is_native_sol(currency)
   return string.lower(currency or '') == 'sol'
@@ -55,8 +57,50 @@ local function normalize_program(ix)
   return ix.program or ''
 end
 
+local function parsed_program_id(ix)
+  local program_id = normalize_program_id(ix)
+  if program_id ~= '' then
+    return program_id
+  end
+  if normalize_program(ix) == 'spl-memo' then
+    return MEMO_PROGRAM
+  end
+  return ''
+end
+
 local function instruction_info(ix)
   return ix.parsed and ix.parsed.info or nil
+end
+
+local function parsed_memo_text(ix)
+  if type(ix.parsed) == 'string' then
+    return ix.parsed
+  end
+  local info = instruction_info(ix)
+  if type(info) == 'table' then
+    return info.memo or info.data
+  end
+  return nil
+end
+
+local function expected_memos(request, method_details)
+  local expected = {}
+  if request.externalId and request.externalId ~= '' then
+    expected[#expected + 1] = {
+      label = 'externalId',
+      value = request.externalId,
+    }
+  end
+  local splits = (request.methodDetails and request.methodDetails.splits) or method_details.splits or {}
+  for _, split in ipairs(splits) do
+    if split.memo and split.memo ~= '' then
+      expected[#expected + 1] = {
+        label = 'split',
+        value = split.memo,
+      }
+    end
+  end
+  return expected
 end
 
 local function verify_confirmed_transaction(reference, tx, request, method_details, hooks)
@@ -76,6 +120,7 @@ local function verify_confirmed_transaction(reference, tx, request, method_detai
     end
     verify_spl_transfers(instructions, request, method_details, hooks)
   end
+  verify_memo_instructions(instructions, request, method_details)
 
   return {
     reference = reference,
@@ -134,6 +179,32 @@ function verify_spl_transfers(instructions, request, method_details, hooks)
     end
     if not found then
       error('no matching token transfer for ' .. want.recipient)
+    end
+  end
+end
+
+function verify_memo_instructions(instructions, request, method_details)
+  local matched = {}
+  for _, want in ipairs(expected_memos(request, method_details)) do
+    if #want.value > 566 then
+      error('memo cannot exceed 566 bytes')
+    end
+    local found = false
+    for index, ix in ipairs(instructions or {}) do
+      if not matched[index] and parsed_program_id(ix) == MEMO_PROGRAM and parsed_memo_text(ix) == want.value then
+        matched[index] = true
+        found = true
+        break
+      end
+    end
+    if not found then
+      error('No memo instruction found for ' .. want.label .. ' memo "' .. want.value .. '"')
+    end
+  end
+
+  for index, ix in ipairs(instructions or {}) do
+    if not matched[index] and parsed_program_id(ix) == MEMO_PROGRAM then
+      error('unexpected Memo Program instruction in payment transaction')
     end
   end
 end
