@@ -3,17 +3,39 @@ local M = {
   TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
   ASSOCIATED_TOKEN_PROGRAM = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
   SYSTEM_PROGRAM = '11111111111111111111111111111111',
+  MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr',
 }
 
 local KNOWN_MINTS = {
   USDC = {
     devnet = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+    testnet = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
     ['mainnet-beta'] = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  },
+  USDT = {
+    ['mainnet-beta'] = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+  },
+  USDG = {
+    devnet = '4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7',
+    testnet = '4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7',
+    ['mainnet-beta'] = '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
   },
   PYUSD = {
     devnet = 'CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM',
+    testnet = 'CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM',
     ['mainnet-beta'] = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo',
   },
+  CASH = {
+    ['mainnet-beta'] = 'CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH',
+  },
+}
+
+local TOKEN_PROGRAMS = {
+  USDC = M.TOKEN_PROGRAM,
+  USDT = M.TOKEN_PROGRAM,
+  USDG = M.TOKEN_2022_PROGRAM,
+  PYUSD = M.TOKEN_2022_PROGRAM,
+  CASH = M.TOKEN_2022_PROGRAM,
 }
 
 function M.default_rpc_url(network)
@@ -33,13 +55,33 @@ function M.resolve_mint(currency, network)
 
   local known = KNOWN_MINTS[normalized]
   if known then
-    if network == 'devnet' then
-      return known.devnet
-    end
-    return known['mainnet-beta']
+    return known[network] or known['mainnet-beta']
   end
 
   return currency
+end
+
+function M.stablecoin_symbol(currency)
+  local normalized = string.upper(currency or '')
+  if KNOWN_MINTS[normalized] then
+    return normalized
+  end
+  for symbol, mints in pairs(KNOWN_MINTS) do
+    for _, mint in pairs(mints) do
+      if currency == mint then
+        return symbol
+      end
+    end
+  end
+  return nil
+end
+
+function M.default_token_program_for_currency(currency, network)
+  local symbol = M.stablecoin_symbol(M.resolve_mint(currency, network)) or M.stablecoin_symbol(currency)
+  if symbol then
+    return TOKEN_PROGRAMS[symbol]
+  end
+  return M.TOKEN_PROGRAM
 end
 
 return M

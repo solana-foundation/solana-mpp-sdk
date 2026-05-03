@@ -156,13 +156,18 @@ async function payWithWallet() {
   let instructions: Instruction[] = computeBudgetInstructions();
   if (isNativeSOL) {
     instructions.push(systemTransfer(walletPubkey, recipientPubkey, primaryAmount));
-    for (const s of splits) instructions.push(systemTransfer(walletPubkey, bs58Decode(s.recipient), BigInt(s.amount)));
+    appendMemoInstruction(instructions, request.externalId);
+    for (const s of splits) {
+      instructions.push(systemTransfer(walletPubkey, bs58Decode(s.recipient), BigInt(s.amount)));
+      appendMemoInstruction(instructions, s.memo);
+    }
   } else {
     const mintPubkey = bs58Decode(mint!);
     const decimals = md.decimals ?? 6;
     const sourceAta = bs58Decode(await findATA(walletB58, mint!, tokenProg));
     const destAta = bs58Decode(await findATA(request.recipient, mint!, tokenProg));
     instructions.push(tokenTransferChecked(sourceAta, mintPubkey, destAta, walletPubkey, primaryAmount, decimals, tokenProg));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       const splitRecipient = bs58Decode(s.recipient);
       const splitAta = bs58Decode(await findATA(s.recipient, mint!, tokenProg));
@@ -170,6 +175,7 @@ async function payWithWallet() {
         instructions.push(createAtaIdempotent(ataPayer, splitAta, splitRecipient, mintPubkey, tokenProg));
       }
       instructions.push(tokenTransferChecked(sourceAta, mintPubkey, splitAta, walletPubkey, BigInt(s.amount), decimals, tokenProg));
+      appendMemoInstruction(instructions, s.memo);
     }
   }
 
@@ -275,13 +281,18 @@ async function payTestMode() {
   let instructions: Instruction[] = computeBudgetInstructions();
   if (isNativeSOL) {
     instructions.push(systemTransfer(publicKeyRaw, recipientPubkey, primaryAmount));
-    for (const s of splits) instructions.push(systemTransfer(publicKeyRaw, bs58Decode(s.recipient), BigInt(s.amount)));
+    appendMemoInstruction(instructions, request.externalId);
+    for (const s of splits) {
+      instructions.push(systemTransfer(publicKeyRaw, bs58Decode(s.recipient), BigInt(s.amount)));
+      appendMemoInstruction(instructions, s.memo);
+    }
   } else {
     const mintPubkey = bs58Decode(mint!);
     const decimals = md.decimals ?? 6;
     const sourceAta = bs58Decode(await findATA(publicKeyB58, mint!, tokenProg));
     const destAta = bs58Decode(await findATA(request.recipient, mint!, tokenProg));
     instructions.push(tokenTransferChecked(sourceAta, mintPubkey, destAta, publicKeyRaw, primaryAmount, decimals, tokenProg));
+    appendMemoInstruction(instructions, request.externalId);
     for (const s of splits) {
       const splitRecipient = bs58Decode(s.recipient);
       const splitAta = bs58Decode(await findATA(s.recipient, mint!, tokenProg));
@@ -289,6 +300,7 @@ async function payTestMode() {
         instructions.push(createAtaIdempotent(ataPayer, splitAta, splitRecipient, mintPubkey, tokenProg));
       }
       instructions.push(tokenTransferChecked(sourceAta, mintPubkey, splitAta, publicKeyRaw, BigInt(s.amount), decimals, tokenProg));
+      appendMemoInstruction(instructions, s.memo);
     }
   }
 
@@ -391,7 +403,6 @@ function getRpcUrl(n: string) {
 
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
-const CASH_MAINNET_MINT = 'CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH';
 const STABLECOIN_MINTS: Record<string, Record<string, string>> = {
   USDC: {
     devnet: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
@@ -400,14 +411,19 @@ const STABLECOIN_MINTS: Record<string, Record<string, string>> = {
   USDT: {
     'mainnet-beta': 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
   },
+  USDG: {
+    devnet: '4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7',
+    'mainnet-beta': '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
+  },
   PYUSD: {
     devnet: 'CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM',
     'mainnet-beta': '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo',
   },
   CASH: {
-    'mainnet-beta': CASH_MAINNET_MINT,
+    'mainnet-beta': 'CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH',
   },
 };
+const TOKEN_2022_STABLECOIN_SYMBOLS = new Set(['PYUSD', 'USDG', 'CASH']);
 
 function resolveMint(currency: string, network: string): string | null {
   if (currency.toLowerCase() === 'sol') return null;
@@ -416,8 +432,19 @@ function resolveMint(currency: string, network: string): string | null {
   return mints?.[network] ?? mints?.['mainnet-beta'] ?? currency;
 }
 
+function stablecoinSymbol(currency: string, network: string): string | undefined {
+  const normalized = currency.toUpperCase();
+  if (STABLECOIN_MINTS[normalized]) return normalized;
+  const resolved = resolveMint(currency, network);
+  if (!resolved) return undefined;
+  for (const [symbol, mints] of Object.entries(STABLECOIN_MINTS)) {
+    if (Object.values(mints).includes(resolved)) return symbol;
+  }
+}
+
 function defaultTokenProgram(currency: string, network: string): string {
-  return resolveMint(currency, network) === CASH_MAINNET_MINT ? TOKEN_2022_PROGRAM : TOKEN_PROGRAM;
+  const symbol = stablecoinSymbol(currency, network);
+  return symbol && TOKEN_2022_STABLECOIN_SYMBOLS.has(symbol) ? TOKEN_2022_PROGRAM : TOKEN_PROGRAM;
 }
 
 async function findATA(owner: string, mint: string, tokenProg: string) {
@@ -428,11 +455,12 @@ async function findATA(owner: string, mint: string, tokenProg: string) {
 // ── Transaction building ──
 
 type Instruction = { programId: string; accounts: { pubkey: Uint8Array; isSigner: boolean; isWritable: boolean }[]; data: Uint8Array };
-type Split = { recipient: string; amount: string; ataCreationRequired?: boolean };
+type Split = { recipient: string; amount: string; ataCreationRequired?: boolean; memo?: string };
 
 const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
 const ATA_PROGRAM = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
 /** SetComputeUnitPrice(1) + SetComputeUnitLimit(200_000) */
 function computeBudgetInstructions(): Instruction[] {
@@ -462,6 +490,13 @@ function createAtaIdempotent(payer: Uint8Array, ata: Uint8Array, owner: Uint8Arr
 
 function shouldCreateSplitAta(hasSeparateFeePayer: boolean, split: Split): boolean {
   return !hasSeparateFeePayer || split.ataCreationRequired === true;
+}
+
+function appendMemoInstruction(instructions: Instruction[], memo: string | undefined) {
+  if (!memo) return;
+  const data = new TextEncoder().encode(memo);
+  if (data.byteLength > 566) throw new Error('memo cannot exceed 566 bytes');
+  instructions.push({ programId: MEMO_PROGRAM, accounts: [], data });
 }
 
 function systemTransfer(from: Uint8Array, to: Uint8Array, lamports: bigint): Instruction {

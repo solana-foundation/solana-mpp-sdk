@@ -23,6 +23,16 @@ _KNOWN_SYMBOLS: dict[str, str] = {
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
     "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC",
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+    "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH": "USDG",
+    "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7": "USDG",
+    "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo": "PYUSD",
+    "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM": "PYUSD",
+    "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH": "CASH",
+    "USDC": "USDC",
+    "USDT": "USDT",
+    "USDG": "USDG",
+    "PYUSD": "PYUSD",
+    "CASH": "CASH",
 }
 
 _TEMPLATE: str | None = None

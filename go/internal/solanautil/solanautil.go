@@ -49,6 +49,18 @@ func BuildComputeUnitPrice(microLamports uint64) (solana.Instruction, error) {
 	return computebudget.NewSetComputeUnitPriceInstruction(microLamports).ValidateAndBuild()
 }
 
+// BuildMemoInstruction builds a Solana Memo Program instruction.
+func BuildMemoInstruction(memo string) (solana.Instruction, error) {
+	if len([]byte(memo)) > 566 {
+		return nil, fmt.Errorf("memo cannot exceed 566 bytes")
+	}
+	programID, err := solana.PublicKeyFromBase58(protocol.MemoProgram)
+	if err != nil {
+		return nil, err
+	}
+	return solana.NewInstruction(programID, solana.AccountMetaSlice{}, []byte(memo)), nil
+}
+
 // BuildCreateAssociatedTokenAccount creates an idempotent ATA create instruction.
 func BuildCreateAssociatedTokenAccount(payer, wallet, mint, tokenProgram solana.PublicKey) (solana.Instruction, error) {
 	ata, err := FindAssociatedTokenAddressWithProgram(wallet, mint, tokenProgram)

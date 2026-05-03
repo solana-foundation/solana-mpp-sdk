@@ -8,6 +8,7 @@ SYSTEM_PROGRAM = "11111111111111111111111111111111"
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
 
 
 # Mint addresses keyed by currency symbol, then by network.
@@ -15,11 +16,32 @@ KNOWN_MINTS: dict[str, dict[str, str]] = {
     "USDC": {
         "mainnet-beta": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         "devnet": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "testnet": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    },
+    "USDT": {
+        "mainnet-beta": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    },
+    "USDG": {
+        "mainnet-beta": "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",
+        "devnet": "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7",
+        "testnet": "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7",
     },
     "PYUSD": {
         "mainnet-beta": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
         "devnet": "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM",
+        "testnet": "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM",
     },
+    "CASH": {
+        "mainnet-beta": "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH",
+    },
+}
+
+STABLECOIN_TOKEN_PROGRAMS: dict[str, str] = {
+    "USDC": TOKEN_PROGRAM,
+    "USDT": TOKEN_PROGRAM,
+    "USDG": TOKEN_2022_PROGRAM,
+    "PYUSD": TOKEN_2022_PROGRAM,
+    "CASH": TOKEN_2022_PROGRAM,
 }
 
 
@@ -45,6 +67,25 @@ def resolve_mint(currency: str, network: str) -> str:
         networks = KNOWN_MINTS[upper]
         return networks.get(network, networks.get("mainnet-beta", currency))
     return currency
+
+
+def stablecoin_symbol(currency: str) -> str | None:
+    """Return the supported stablecoin symbol for a symbol or known mint."""
+    upper = currency.upper()
+    if upper in KNOWN_MINTS:
+        return upper
+    for symbol, networks in KNOWN_MINTS.items():
+        if currency in networks.values():
+            return symbol
+    return None
+
+
+def default_token_program_for_currency(currency: str, network: str) -> str:
+    """Return the known default token program for a currency or mint."""
+    symbol = stablecoin_symbol(resolve_mint(currency, network)) or stablecoin_symbol(currency)
+    if symbol:
+        return STABLECOIN_TOKEN_PROGRAMS[symbol]
+    return TOKEN_PROGRAM
 
 
 def is_native_sol(currency: str) -> bool:

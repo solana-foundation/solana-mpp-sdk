@@ -31,6 +31,7 @@ import { Credential, Method } from 'mppx';
 import {
     ASSOCIATED_TOKEN_PROGRAM,
     DEFAULT_RPC_URLS,
+    MEMO_PROGRAM,
     resolveStablecoinMint,
     SYSTEM_PROGRAM,
     TOKEN_2022_PROGRAM,
@@ -139,7 +140,7 @@ export async function buildChargeTransaction(
 ): Promise<Base64EncodedWireTransaction> {
     const {
         signer,
-        request: { amount, currency, recipient, methodDetails },
+        request: { amount, currency, externalId, recipient, methodDetails },
         onProgress,
     } = parameters;
     const {
@@ -187,6 +188,18 @@ export async function buildChargeTransaction(
 
     // Build transfer instructions.
     const instructions: Instruction[] = [];
+    const addMemoInstruction = (memo: string | undefined) => {
+        if (!memo) return;
+        const data = new TextEncoder().encode(memo);
+        if (data.byteLength > 566) {
+            throw new Error('memo cannot exceed 566 bytes');
+        }
+        instructions.push({
+            accounts: [],
+            data,
+            programAddress: address(MEMO_PROGRAM),
+        });
+    };
 
     if (mint) {
         // ── SPL token transfers ──
@@ -254,6 +267,7 @@ export async function buildChargeTransaction(
 
         // Primary recipient ATA creation is intentionally out of scope.
         await addSplTransfer(recipient, primaryAmount, false);
+        addMemoInstruction(externalId);
 
         // Split transfers.
         for (const split of splits ?? []) {
@@ -262,6 +276,7 @@ export async function buildChargeTransaction(
                 BigInt(split.amount),
                 !useServerFeePayer || split.ataCreationRequired === true,
             );
+            addMemoInstruction(split.memo);
         }
     } else {
         // ── Native SOL transfers ──
@@ -273,6 +288,7 @@ export async function buildChargeTransaction(
                 source: signer,
             }),
         );
+        addMemoInstruction(externalId);
 
         // Split transfers.
         for (const split of splits ?? []) {
@@ -283,6 +299,7 @@ export async function buildChargeTransaction(
                     source: signer,
                 }),
             );
+            addMemoInstruction(split.memo);
         }
     }
 
@@ -456,6 +473,7 @@ export declare namespace buildChargeTransaction {
         request: {
             amount: string;
             currency: string;
+            externalId?: string;
             methodDetails: {
                 decimals?: number;
                 feePayer?: boolean;
